@@ -1,0 +1,8 @@
+{
+  "title": "Fan-out / fan-in review",
+  "kind": "architecture",
+  "summary": "Four specialist reviewers (bugs, security, performance, conventions) run in parallel on the same code, a consolidator deduplicates and ranks their findings, and a scorer measures recall of the app's planted issues against a single all-in-one reviewer.",
+  "concepts": ["parallel subagents", "consolidation", "specialist vs generalist", "recall scoring", "quota burn rate"],
+  "course": ["AI Fluent 2 M2 (pattern 2)", "AI Fluent 2 M1 (small specialized verifiers)"],
+  "run_prompt": null
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Orchestrator with delegation",
+  "kind": "architecture",
+  "summary": "The whole session runs as an orchestrator agent that writes no code. It classifies tickets, routes them to specialists (in parallel when they're independent), has a tool-based checker verify each result, retries with the diagnosis, and escalates after two failures.",
+  "concepts": ["agent setting / --agent", "Agent(type) allowlist", "routing", "parallel delegation", "tool-based verification", "retry budget", "escalation"],
+  "course": ["AI Fluent 2 M2 (pattern 3)", "AI Fluent 2 M5"],
+  "run_prompt": "Handle the ticket {ticket}."
+}

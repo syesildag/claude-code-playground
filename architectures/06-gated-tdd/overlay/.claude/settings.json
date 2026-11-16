@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest)",
+      "Bash(python3 -m unittest *)",
+      "Bash(python3 -m taskboard *)",
+      "Bash(python3 scripts/gate.py *)",
+      "Bash(python3 scripts/proof_page.py *)",
+      "Bash(mkdir -p work/gates)",
+      "Bash(mkdir -p work/gates *)",
+      "Bash(touch work/.tdd-active)",
+      "Bash(rm work/.tdd-active)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git status *)",
+      "Write(./work/**)",
+      "Write(./docs/lessons.md)",
+      "Edit(./docs/lessons.md)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/require_proof.py\"" }
+        ]
+      }
+    ]
+  }
+}

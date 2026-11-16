@@ -1,0 +1,53 @@
+diff --git a/taskboard/store.py b/taskboard/store.py
+index 5873a33..2496b38 100644
+--- a/taskboard/store.py
++++ b/taskboard/store.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
+ 
++import contextlib
+ import json
+ import os
++import tempfile
+ from pathlib import Path
+ 
+ from .models import Task
+@@ -24,5 +26,16 @@ class JsonStore:
+             return [Task.from_dict(item) for item in json.load(fh)]
+ 
+     def save(self, tasks: list[Task]) -> None:
+-        with self.path.open("w", encoding="utf-8") as fh:
+-            json.dump([task.to_dict() for task in tasks], fh, indent=2)
++        """Write to a temp file in the same directory, then atomically swap it in."""
++        directory = self.path.parent if str(self.path.parent) else Path(".")
++        fd, tmp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", suffix=".tmp", dir=directory)
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as fh:
++                json.dump([task.to_dict() for task in tasks], fh, indent=2)
++                fh.flush()
++                os.fsync(fh.fileno())
++            os.replace(tmp_name, self.path)
++        except BaseException:
++            with contextlib.suppress(FileNotFoundError):
++                os.unlink(tmp_name)
++            raise
+diff --git a/tests/test_store.py b/tests/test_store.py
+index 81558fa..b2c681e 100644
+--- a/tests/test_store.py
++++ b/tests/test_store.py
+@@ -21,6 +21,15 @@ class JsonStoreTest(unittest.TestCase):
+         JsonStore(self.path).save(tasks)
+         self.assertEqual(JsonStore(self.path).load(), tasks)
+ 
++    def test_failed_save_keeps_previous_board(self) -> None:
++        store = JsonStore(self.path)
++        store.save([Task(1, "a")])
++        before = self.path.read_bytes()
++        with self.assertRaises(TypeError):
++            store.save([Task(1, "a"), Task(2, object())])  # type: ignore[arg-type]
++        self.assertEqual(self.path.read_bytes(), before)
++        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["board.json"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

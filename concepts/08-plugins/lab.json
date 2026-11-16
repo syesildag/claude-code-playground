@@ -1,0 +1,8 @@
+{
+  "title": "Plugins & marketplaces",
+  "kind": "concept",
+  "summary": "Package a skill, an agent and a hook policy as a versioned plugin, publish it through a local marketplace, and load it per session or per team.",
+  "concepts": ["plugin.json", "marketplace.json", "--plugin-dir", "namespacing", "hooks.json", "${CLAUDE_PLUGIN_ROOT}", "extraKnownMarketplaces", "enabledPlugins", "claude plugin validate", "versioning"],
+  "course": ["AI Fluent 1 M5 (distribution, governance)", "AI Fluent 1 M6 / AI Fluent 2 M6 (catalog, maturity ladder)"],
+  "run_prompt": null
+}

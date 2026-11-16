@@ -1,0 +1,8 @@
+{
+  "title": "Sequential pipeline",
+  "kind": "architecture",
+  "summary": "Spec writer → developer → test writer. Each agent's output file is the next one's only input, a human checkpoint sits after the spec, and each role can write only in its own area (work/, taskboard/, tests/).",
+  "concepts": ["artifact hand-off", "human checkpoint", "least privilege per role", "scoped writes", "TDD variant"],
+  "course": ["AI Fluent 2 M2 (pattern 1)"],
+  "run_prompt": "/pipeline {ticket} --auto"
+}

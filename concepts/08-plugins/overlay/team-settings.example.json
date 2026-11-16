@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "lab-tools": {
+      "source": { "source": "directory", "path": "/ABSOLUTE/PATH/TO/SANDBOX/marketplace" }
+    }
+  },
+  "enabledPlugins": {
+    "review-kit@lab-tools": true
+  }
+}

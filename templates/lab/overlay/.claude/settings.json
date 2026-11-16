@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest)",
+      "Bash(python3 -m unittest *)",
+      "Bash(python3 -m taskboard *)"
+    ]
+  }
+}

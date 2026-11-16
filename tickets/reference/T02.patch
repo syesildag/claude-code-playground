@@ -1,0 +1,133 @@
+diff --git a/taskboard/cli.py b/taskboard/cli.py
+index 371f9d9..7894339 100644
+--- a/taskboard/cli.py
++++ b/taskboard/cli.py
+@@ -4,7 +4,7 @@ import argparse
+ import sys
+ from pathlib import Path
+ 
+-from .models import STATUSES
++from .models import DEFAULT_PRIORITY, PRIORITIES, STATUSES
+ from .report import export_html
+ from .service import TaskBoard
+ from .store import JsonStore
+@@ -17,9 +17,11 @@ def build_parser() -> argparse.ArgumentParser:
+ 
+     add = sub.add_parser("add", help="add a task")
+     add.add_argument("title")
++    add.add_argument("--priority", choices=PRIORITIES, default=DEFAULT_PRIORITY)
+ 
+     lst = sub.add_parser("list", help="list tasks")
+     lst.add_argument("--status", choices=STATUSES)
++    lst.add_argument("--order", choices=("id", "priority"), default="id")
+ 
+     move = sub.add_parser("move", help="move a task to another column")
+     move.add_argument("id", type=int)
+@@ -37,10 +39,10 @@ def main(argv: list[str] | None = None) -> int:
+     board = TaskBoard(JsonStore(args.db))
+     try:
+         if args.command == "add":
+-            task = board.add(args.title)
++            task = board.add(args.title, args.priority)
+             print(f"added #{task.id}: {task.title}")
+         elif args.command == "list":
+-            for task in board.list(args.status):
++            for task in board.list(args.status, order=args.order):
+                 current = board.get(task.id)  # re-read so we always print the latest state
+                 print(f"#{current.id:<3} [{current.status:<5}] {current.title}")
+         elif args.command == "move":
+diff --git a/taskboard/models.py b/taskboard/models.py
+index 2c3eb96..d5ffe53 100644
+--- a/taskboard/models.py
++++ b/taskboard/models.py
+@@ -5,6 +5,10 @@ from dataclasses import asdict, dataclass
+ # The board's columns, in display order. This tuple is the single source of truth for status names.
+ STATUSES: tuple[str, ...] = ("todo", "doing", "done")
+ 
++# Lowest to highest. Tasks saved before priorities existed load as "medium".
++PRIORITIES: tuple[str, ...] = ("low", "medium", "high")
++DEFAULT_PRIORITY = "medium"
++
+ 
+ @dataclass
+ class Task:
+@@ -12,6 +16,7 @@ class Task:
+     title: str
+     status: str = "todo"
+     created_at: str = ""
++    priority: str = DEFAULT_PRIORITY
+ 
+     def to_dict(self) -> dict:
+         return asdict(self)
+diff --git a/taskboard/service.py b/taskboard/service.py
+index 501a658..7a59f27 100644
+--- a/taskboard/service.py
++++ b/taskboard/service.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ from datetime import datetime, timezone
+ 
+-from .models import STATUSES, Task
++from .models import DEFAULT_PRIORITY, PRIORITIES, STATUSES, Task
+ from .store import JsonStore
+ 
+ 
+@@ -16,12 +16,16 @@ class TaskBoard:
+     def __init__(self, store: JsonStore) -> None:
+         self.store = store
+ 
+-    def add(self, title: str) -> Task:
++    def add(self, title: str, priority: str = DEFAULT_PRIORITY) -> Task:
+         title = title.strip()
+         if not title:
+             raise ValueError("title must not be empty")
++        if priority not in PRIORITIES:
++            raise ValueError(f"unknown priority {priority!r}; expected one of: {', '.join(PRIORITIES)}")
+         tasks = self.store.load()
+-        task = Task(id=max((t.id for t in tasks), default=0) + 1, title=title, created_at=_now())
++        task = Task(
++            id=max((t.id for t in tasks), default=0) + 1, title=title, created_at=_now(), priority=priority
++        )
+         tasks.append(task)
+         self.store.save(tasks)
+         return task
+@@ -43,11 +47,15 @@ class TaskBoard:
+                 return task
+         raise KeyError(f"task {task_id} not found")
+ 
+-    def list(self, status: str | None = None) -> list[Task]:
++    def list(self, status: str | None = None, order: str = "id") -> list[Task]:
+         tasks = self.store.load()
+         if status is not None:
+             tasks = [t for t in tasks if t.status == status]
+-        return tasks
++        if order == "id":
++            return sorted(tasks, key=lambda t: t.id)
++        if order == "priority":
++            return sorted(tasks, key=lambda t: (-PRIORITIES.index(t.priority), t.id))
++        raise ValueError(f"unknown order {order!r}; expected 'id' or 'priority'")
+ 
+     def stats(self) -> dict[str, int]:
+         tasks = self.store.load()
+diff --git a/tests/test_service.py b/tests/test_service.py
+index 3a1a753..4d11c4c 100644
+--- a/tests/test_service.py
++++ b/tests/test_service.py
+@@ -50,6 +50,17 @@ class TaskBoardTest(unittest.TestCase):
+         self.board.move(a.id, "done")
+         self.assertEqual(self.board.stats(), {"total": 2, "done": 1, "open": 1})
+ 
++    def test_priority_defaults_to_medium_and_validates(self) -> None:
++        self.assertEqual(self.board.add("a").priority, "medium")
++        with self.assertRaises(ValueError):
++            self.board.add("b", priority="urgent")
++
++    def test_list_orders_by_priority_then_id(self) -> None:
++        self.board.add("a", priority="low")
++        self.board.add("b", priority="high")
++        self.board.add("c")
++        self.assertEqual([t.title for t in self.board.list(order="priority")], ["b", "c", "a"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

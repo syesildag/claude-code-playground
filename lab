@@ -1,0 +1,664 @@
+#!/usr/bin/env python3
+"""lab: build sandboxes, run experiments and compare Claude Code setups.
+
+  ./lab list                                   list every lab
+  ./lab new <lab> [--launch]                   fresh sandbox = app + tickets + the lab's overlay
+  ./lab run <lab> --ticket T01 [options]       headless experiment, scored by hidden acceptance tests
+  ./lab compare [--ticket T01] [--detail]      table of recorded runs
+  ./lab inspect <lab|sandbox>                  what a session actually loads (agents, skills, MCP...)
+  ./lab check                                  validate every lab, ticket and reference solution
+  ./lab scaffold <concepts|architectures> <slug>   start a new lab from templates/lab
+  ./lab clean [--yes]                          delete all sandboxes
+
+<lab> can be a folder name ("04-hooks"), a path ("concepts/04-hooks") or any unique fragment ("hooks").
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+LAB_ROOTS = ("concepts", "architectures")
+SANDBOXES = REPO / ".sandbox"
+RESULTS = REPO / "results"
+TICKETS = REPO / "tickets"
+
+# "Clean room": skip ~/.claude/settings.json, so your personal plugins, skills and hooks don't leak into a lab.
+CLEAN_ROOM = ["--setting-sources", "project,local"]
+
+# Tool permissions granted to headless runs (written to the sandbox's .claude/settings.local.json).
+RUN_ALLOW = [
+    "Bash(python3 -m unittest)", "Bash(python3 -m unittest *)",
+    "Bash(python3 -m taskboard *)", "Bash(python3 -m py_compile *)",
+    "Bash(python3 scripts/*)", "Bash(python3 .claude/*)",
+    "Bash(git status)", "Bash(git status *)", "Bash(git diff)", "Bash(git diff *)",
+    "Bash(git log *)", "Bash(git show *)", "Bash(ls *)", "Bash(mkdir -p *)",
+]
+COPY_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "board.json", ".DS_Store")
+
+
+# ----------------------------------------------------------------------------- helpers
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"lab: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    cmd = ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+           "-c", "user.name=lab", "-c", "user.email=lab@localhost", "-c", "init.defaultBranch=main", *args]
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+
+
+def all_labs() -> list[Path]:
+    labs = []
+    for root in LAB_ROOTS:
+        base = REPO / root
+        if base.is_dir():
+            labs += [d for d in sorted(base.iterdir()) if (d / "lab.json").is_file()]
+    return labs
+
+
+def find_lab(name: str) -> Path:
+    candidate = (REPO / name).resolve()
+    if (candidate / "lab.json").is_file():
+        return candidate
+    labs = all_labs()
+    exact = [d for d in labs if d.name == name]
+    if exact:
+        return exact[0]
+    matches = [d for d in labs if name.lower() in str(d.relative_to(REPO)).lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        die(f"no lab matches {name!r}. Try ./lab list")
+    die(f"{name!r} is ambiguous: " + ", ".join(str(m.relative_to(REPO)) for m in matches))
+    raise AssertionError  # unreachable
+
+
+def meta(lab: Path) -> dict:
+    return json.loads((lab / "lab.json").read_text(encoding="utf-8"))
+
+
+def find_ticket(ticket_id: str) -> Path:
+    found = sorted(TICKETS.glob(f"{ticket_id.upper()}-*.md"))
+    if not found:
+        die(f"no ticket {ticket_id!r} in tickets/")
+    return found[0]
+
+
+def merge(base: dict, extra: dict) -> dict:
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge(base[key], value)
+        elif isinstance(value, list) and isinstance(base.get(key), list):
+            base[key] += [v for v in value if v not in base[key]]
+        else:
+            base[key] = value
+    return base
+
+
+def merge_json_file(path: Path, extra: dict) -> None:
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(merge(data, extra), indent=2) + "\n", encoding="utf-8")
+
+
+def make_sandbox(lab: Path, tag: str = "") -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = SANDBOXES / f"{lab.name}-{stamp}{'-' + tag if tag else ''}"
+    n = 1
+    while dest.exists():
+        n += 1
+        dest = dest.with_name(f"{dest.name}-{n}")
+    shutil.copytree(REPO / "app", dest, ignore=COPY_IGNORE)
+    shutil.copytree(TICKETS, dest / "tickets",
+                    ignore=shutil.ignore_patterns("acceptance", "reference", "__pycache__"))
+    overlay = lab / "overlay"
+    if overlay.is_dir():
+        shutil.copytree(overlay, dest, dirs_exist_ok=True, ignore=COPY_IGNORE)
+    # CLAUDE.md files load from every parent directory. Keep this repo's own CLAUDE.md out of the sandbox.
+    merge_json_file(dest / ".claude" / "settings.local.json",
+                    {"claudeMdExcludes": [str(REPO / "CLAUDE.md"), str(REPO / "CLAUDE.local.md")]})
+    git(dest, "init", "-q")
+    git(dest, "add", "-A")
+    git(dest, "commit", "-q", "-m", f"lab baseline: {lab.relative_to(REPO)}")
+    return dest
+
+
+def run_unittest(cwd: Path, *args: str) -> dict:
+    proc = subprocess.run([sys.executable, "-m", "unittest", *args], cwd=cwd,
+                          capture_output=True, text=True, timeout=300)
+    out = proc.stdout + proc.stderr
+    ran = re.search(r"^Ran (\d+) tests?", out, re.M)
+    failed = sorted(set(re.findall(r"^(?:FAIL|ERROR): \S+ \(([\w.]+)\)", out, re.M)))
+    summary = next((line for line in reversed(out.strip().splitlines()) if line.strip()), "")
+    return {"ok": proc.returncode == 0, "ran": int(ran.group(1)) if ran else 0,
+            "failed": failed, "summary": summary}
+
+
+def run_acceptance(sandbox: Path, ticket_id: str) -> dict | None:
+    src = TICKETS / "acceptance" / f"test_{ticket_id.lower()}.py"
+    if not src.exists():
+        return None
+    target = sandbox / "_acceptance"
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir()
+    (target / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copy(src, target / src.name)
+    return run_unittest(sandbox, "discover", "-s", "_acceptance", "-t", ".")
+
+
+def last_json(text: str) -> dict:
+    for line in reversed(text.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+
+
+def changed_files(sandbox: Path) -> list[str]:
+    out = git(sandbox, "status", "--porcelain", "--untracked-files=all").stdout
+    files = [line[3:] for line in out.splitlines() if line.strip()]
+    noise = ("_acceptance/", ".claude/logs/", ".claude/agent-memory", "work/")
+    return [f for f in files if not f.startswith(noise) and "__pycache__" not in f]
+
+
+# ----------------------------------------------------------------------------- lint
+# Claude Code silently ignores unknown frontmatter fields and `claude plugin validate` accepts bad values,
+# so a typo like `contex: fork` just... doesn't work. This linter catches what it can.
+SKILL_KEYS = {"name", "description", "when_to_use", "argument-hint", "arguments", "disable-model-invocation",
+              "user-invocable", "allowed-tools", "disallowed-tools", "model", "effort", "context", "agent",
+              "background", "hooks", "paths", "shell", "metadata", "license", "compatibility"}
+COMMAND_KEYS = (SKILL_KEYS - {"name", "paths"}) | {"hide-from-slash-command-tool"}
+AGENT_KEYS = {"name", "description", "tools", "disallowedTools", "model", "permissionMode", "maxTurns",
+              "autoCompactWindow", "skills", "mcpServers", "hooks", "memory", "background", "omitClaudeMd",
+              "effort", "isolation", "color", "initialPrompt", "experimental"}
+STYLE_KEYS = {"name", "description", "keep-coding-instructions", "force-for-plugin"}
+HOOK_EVENTS = {"SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion", "PreToolUse",
+               "PermissionRequest", "PermissionDenied", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
+               "Notification", "MessageDisplay", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted",
+               "Stop", "StopFailure", "TeammateIdle", "InstructionsLoaded", "ConfigChange", "CwdChanged",
+               "DirectoryAdded", "FileChanged", "WorktreeCreate", "WorktreeRemove", "PreCompact", "PostCompact",
+               "PreModelSwitch", "PostModelSwitch", "Elicitation", "ElicitationResult", "SessionEnd"}
+HOOK_TYPES = {"command", "http", "mcp_tool", "prompt", "agent"}
+MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
+EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+COLORS = {"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"}
+BOOLS = {"true", "false", "yes", "no", "on", "off", "1", "0"}
+
+
+def frontmatter(path: Path) -> dict[str, str] | None:
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---", 3)
+    fields = {}
+    for line in text[4:end].splitlines():
+        m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", line)  # top-level keys only
+        if m:
+            fields[m.group(1)] = m.group(2).strip().strip("'\"")
+    return fields
+
+
+def lint_markdown(path: Path, kind: str) -> list[str]:
+    fm = frontmatter(path)
+    if fm is None:
+        return ["no frontmatter: the file must start with '---' on line 1"]
+    known = {"skill": SKILL_KEYS, "command": COMMAND_KEYS, "agent": AGENT_KEYS, "style": STYLE_KEYS}[kind]
+    problems = [f"unknown field '{k}' (silently ignored by Claude Code)" for k in fm if k not in known]
+    if kind in ("skill", "command", "agent") and not fm.get("description"):
+        problems.append("missing description (it's how Claude decides when to use it)")
+    if fm.get("model") and fm["model"] not in MODEL_ALIASES and not fm["model"].startswith("claude-"):
+        problems.append(f"model '{fm['model']}' is not an alias ({', '.join(sorted(MODEL_ALIASES))}) or claude-* id")
+    if fm.get("effort") and fm["effort"] not in EFFORTS:
+        problems.append(f"effort '{fm['effort']}' must be one of {', '.join(sorted(EFFORTS))}")
+    for key in ("disable-model-invocation", "user-invocable", "background", "keep-coding-instructions"):
+        if key in fm and fm[key].lower() not in BOOLS:
+            problems.append(f"{key} must be a boolean, got '{fm[key]}'")
+    if kind == "skill":
+        if fm.get("name") and not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", fm["name"]):
+            problems.append(f"skill name '{fm['name']}' should be kebab-case")
+        if "context" in fm and fm["context"] != "fork":
+            problems.append(f"context must be 'fork', got '{fm['context']}'")
+        if "agent" in fm and fm.get("context") != "fork":
+            problems.append("agent only applies together with context: fork")
+    if kind == "agent":
+        if not fm.get("name"):
+            problems.append("missing name (required for agents)")
+        elif ":" in fm["name"]:
+            problems.append("agent name can't contain ':' (reserved for plugin namespaces)")
+        if "tools" not in fm:
+            problems.append("no tools: it inherits every tool (this repo's convention is least privilege)")
+        if fm.get("color") and fm["color"] not in COLORS:
+            problems.append(f"color '{fm['color']}' must be one of {', '.join(sorted(COLORS))}")
+        if fm.get("memory") and fm["memory"] not in ("user", "project", "local"):
+            problems.append("memory must be user, project or local")
+    return problems
+
+
+def lint_hooks(hooks: object) -> list[str]:
+    problems = []
+    if not isinstance(hooks, dict):
+        return ["hooks must be an object keyed by event name"]
+    for event, entries in hooks.items():
+        if event not in HOOK_EVENTS:
+            problems.append(f"unknown hook event '{event}'")
+        for entry in entries if isinstance(entries, list) else []:
+            for hook in entry.get("hooks", []):
+                if hook.get("type") not in HOOK_TYPES:
+                    problems.append(f"{event}: hook type '{hook.get('type')}' is not one of {sorted(HOOK_TYPES)}")
+                if hook.get("type") == "command" and not hook.get("command"):
+                    problems.append(f"{event}: command hook without 'command'")
+                if "if" in hook and event not in ("PreToolUse", "PostToolUse", "PostToolUseFailure",
+                                                  "PermissionRequest", "PermissionDenied"):
+                    problems.append(f"{event}: 'if' is only evaluated on tool events. This hook will never run")
+    return problems
+
+
+def lint_targets() -> list[tuple[Path, str]]:
+    targets: list[tuple[Path, str]] = []
+    bases = [d for d in REPO.glob("*/*/overlay/.claude")] + [REPO / ".claude"] + \
+            [p.parent.parent for p in REPO.glob("**/.claude-plugin/plugin.json") if ".sandbox" not in p.parts]
+    for base in bases:
+        targets += [(p, "skill") for p in base.glob("skills/*/SKILL.md")]
+        targets += [(p, "agent") for p in base.glob("agents/**/*.md")]
+        targets += [(p, "command") for p in base.glob("commands/**/*.md")]
+        targets += [(p, "style") for p in base.glob("output-styles/*.md")]
+        targets += [(p, "settings") for p in base.glob("settings*.json")]
+        targets += [(p, "hooks") for p in base.glob("hooks/hooks.json")]
+    return targets
+
+
+def need_claude() -> str:
+    exe = shutil.which("claude")
+    if not exe:
+        die("the `claude` CLI is not on PATH")
+    return exe
+
+
+# ----------------------------------------------------------------------------- commands
+
+def cmd_list(_: argparse.Namespace) -> None:
+    for root in LAB_ROOTS:
+        labs = [d for d in all_labs() if d.parent.name == root]
+        print(f"\n{root}/")
+        for lab in labs:
+            m = meta(lab)
+            runnable = "  [runnable]" if m.get("run_prompt") else ""
+            print(f"  {lab.name:<32} {m.get('title', '')}{runnable}")
+    print("\nTickets:", ", ".join(p.name.split("-")[0] for p in sorted(TICKETS.glob("T*.md"))))
+    print("Start one with:  ./lab new <lab>")
+
+
+def cmd_new(args: argparse.Namespace) -> None:
+    lab = find_lab(args.lab)
+    sandbox = make_sandbox(lab)
+    rel = os.path.relpath(sandbox, Path.cwd())
+    m = meta(lab)
+    print(f"✔ Sandbox for {lab.relative_to(REPO)}: {m.get('title', '')}")
+    print(f"  {sandbox}\n")
+    print(f"  cd {rel}")
+    print(f"  claude {' '.join(CLEAN_ROOM)}\n")
+    print(f"  Lesson: {lab.relative_to(REPO)}/README.md")
+    if args.launch:
+        os.chdir(sandbox)
+        os.execvp(need_claude(), ["claude", *CLEAN_ROOM])
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    exe = need_claude()
+    lab = find_lab(args.lab)
+    m = meta(lab)
+    template = args.prompt or m.get("run_prompt")
+    if not template:
+        die(f"{lab.name} has no run_prompt (it is an interactive lab). Pass --prompt to run it anyway.")
+    ticket = find_ticket(args.ticket)
+    ticket_id = ticket.name.split("-")[0]
+    RESULTS.mkdir(exist_ok=True)
+
+    for i in range(1, args.repeat + 1):
+        sandbox = make_sandbox(lab, tag=f"run-{ticket_id}")
+        # A fresh sandbox is an untrusted workspace: Claude Code ignores allow rules from the committed
+        # .claude/settings.json until someone accepts the trust dialog (hooks and deny rules still apply).
+        # Rules passed with --settings are honoured, so the lab's own allow rules are forwarded that way.
+        project = sandbox / ".claude" / "settings.json"
+        lab_allow = (json.loads(project.read_text(encoding="utf-8")).get("permissions", {}).get("allow", [])
+                     if project.exists() else [])
+        run_settings = {"permissions": {"allow": RUN_ALLOW + [r for r in lab_allow if r not in RUN_ALLOW]}}
+        baseline = run_unittest(sandbox)
+        prompt = template.format(ticket=f"tickets/{ticket.name}", ticket_id=ticket_id)
+        cmd = [exe, "-p", prompt, *CLEAN_ROOM, "--settings", json.dumps(run_settings),
+               "--output-format", "json", "--permission-mode", "acceptEdits", "--permission-prompts", "none",
+               "--max-budget-usd", str(args.budget)]
+        if args.model:
+            cmd += ["--model", args.model]
+        print(f"▶ [{i}/{args.repeat}] {lab.name} × {ticket_id}  (sandbox: {sandbox.name})", flush=True)
+        started = time.time()
+        try:
+            proc = subprocess.run(cmd, cwd=sandbox, capture_output=True, text=True, timeout=args.timeout,
+                                  stdin=subprocess.DEVNULL)
+            stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr, code = exc.stdout or "", f"timeout after {args.timeout}s", -1
+            stdout = stdout.decode() if isinstance(stdout, bytes) else stdout
+        wall = round(time.time() - started, 1)
+        result = last_json(stdout)
+
+        files = changed_files(sandbox)
+        suite = run_unittest(sandbox)
+        acceptance = run_acceptance(sandbox, ticket_id)
+        before, after = set(baseline["failed"]), set(suite["failed"])
+        record = {
+            "lab": lab.name, "kind": m.get("kind"), "ticket": ticket_id, "model": args.model or "default",
+            "run": i, "timestamp": datetime.now().isoformat(timespec="seconds"), "sandbox": str(sandbox),
+            "exit_code": code, "is_error": result.get("is_error", code != 0), "wall_s": wall,
+            "duration_ms": result.get("duration_ms"), "num_turns": result.get("num_turns"),
+            "cost_usd": result.get("total_cost_usd"),
+            "cost_by_model": {k: v.get("costUSD") for k, v in (result.get("modelUsage") or {}).items()},
+            "subagent_stats": result.get("subagent_stats"), "terminal_reason": result.get("terminal_reason"),
+            "permission_denials": result.get("permission_denials") or [],
+            "session_id": result.get("session_id"), "files_changed": files,
+            "suite": suite, "regressions": sorted(after - before), "fixed": sorted(before - after),
+            "acceptance": acceptance, "accepted": bool(acceptance and acceptance["ok"]),
+            "result_text": (result.get("result") or "")[-2000:], "stderr": stderr[-2000:],
+        }
+        out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}_{lab.name}_{ticket_id}_{i}.json"
+        out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+        verdict = "✔ ACCEPTED" if record["accepted"] else "✘ rejected"
+        cost = f"${record['cost_usd']:.3f}" if isinstance(record["cost_usd"], (int, float)) else "$?"
+        print(f"  {verdict}  acceptance: {acceptance['summary'] if acceptance else 'n/a'}")
+        print(f"  cost {cost} · turns {record['num_turns']} · {wall}s · {len(files)} files changed · "
+              f"regressions {len(record['regressions'])} · fixed {len(record['fixed'])} · "
+              f"permission denials {len(record['permission_denials'])}")
+        if record["cost_by_model"]:
+            print("  cost by model: " + ", ".join(f"{k} ${v:.3f}" for k, v in record["cost_by_model"].items()
+                                                  if isinstance(v, (int, float))))
+        if code != 0:
+            print(f"  claude exited with {code}: {stderr.strip()[-300:]}")
+        print(f"  → {out.relative_to(REPO)}")
+
+
+def _fmt(values: list, fmt: str) -> str:
+    values = [v for v in values if isinstance(v, (int, float))]
+    return format(statistics.mean(values), fmt) if values else "-"
+
+
+def cmd_compare(args: argparse.Namespace) -> None:
+    records = []
+    for path in sorted(RESULTS.glob("*.json")) if RESULTS.is_dir() else []:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        if args.ticket and rec["ticket"].upper() != args.ticket.upper():
+            continue
+        records.append(rec)
+    if not records:
+        die("no results yet. Run ./lab run <lab> --ticket T01 first")
+    if args.detail:
+        print("| time | lab | ticket | model | accepted | regressions | cost $ | turns | wall s | files |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
+        for r in records:
+            print(f"| {r['timestamp']} | {r['lab']} | {r['ticket']} | {r['model']} | "
+                  f"{'yes' if r['accepted'] else 'no'} | {len(r['regressions'])} | "
+                  f"{_fmt([r['cost_usd']], '.3f')} | {r['num_turns']} | {r['wall_s']} | {len(r['files_changed'])} |")
+        return
+    groups: dict[tuple, list] = {}
+    for r in records:
+        groups.setdefault((r["ticket"], r["lab"], r["model"]), []).append(r)
+    print("| ticket | lab | model | runs | accepted | no regressions | avg cost $ | avg turns | avg wall s | avg files |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for (ticket, lab, model), rs in sorted(groups.items()):
+        accepted = sum(r["accepted"] for r in rs)
+        clean = sum(not r["regressions"] for r in rs)
+        print(f"| {ticket} | {lab} | {model} | {len(rs)} | {accepted}/{len(rs)} | {clean}/{len(rs)} | "
+              f"{_fmt([r['cost_usd'] for r in rs], '.3f')} | {_fmt([r['num_turns'] for r in rs], '.1f')} | "
+              f"{_fmt([r['wall_s'] for r in rs], '.0f')} | {_fmt([len(r['files_changed']) for r in rs], '.1f')} |")
+
+
+def _defined_names(sandbox: Path) -> tuple[set, set]:
+    agents, skills = set(), set()
+    for f in (sandbox / ".claude" / "agents").glob("**/*.md"):
+        m = re.search(r"^name:\s*(\S+)", f.read_text(encoding="utf-8"), re.M)
+        agents.add(m.group(1) if m else f.stem)
+    for f in (sandbox / ".claude" / "skills").glob("*/SKILL.md"):
+        skills.add(f.parent.name)
+    for f in (sandbox / ".claude" / "commands").glob("**/*.md"):
+        skills.add(f.stem)
+    return agents, skills
+
+
+def cmd_inspect(args: argparse.Namespace) -> None:
+    exe = need_claude()
+    target = Path(args.target)
+    if (target / ".git").exists() and not (target / "lab.json").exists():
+        sandbox = target.resolve()
+    else:
+        sandbox = make_sandbox(find_lab(args.target), tag="inspect")
+    print(f"Inspecting {sandbox} (one tiny Haiku call, budget-capped at $0.05)…\n")
+    cmd = [exe, "-p", "Reply with the single word OK.", *CLEAN_ROOM, "--model", "haiku",
+           "--output-format", "stream-json", "--verbose", "--max-budget-usd", "0.05"]
+    proc = subprocess.run(cmd, cwd=sandbox, capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
+    init = next((json.loads(l) for l in proc.stdout.splitlines()
+                 if '"subtype":"init"' in l.replace(" ", "")), None)
+    if not init:
+        die("could not read the session init event:\n" + proc.stderr[-1000:])
+    my_agents, my_skills = _defined_names(sandbox)
+    star = lambda name, mine: f"★ {name}" if name in mine else f"  {name}"  # noqa: E731
+    print(f"model: {init.get('model')} · output style: {init.get('output_style')} · "
+          f"permission mode: {init.get('permissionMode')}")
+    print(f"\nagents ({len(init.get('agents') or [])}), ★ = defined by this lab:")
+    for a in init.get("agents") or []:
+        print("   ", star(a, my_agents))
+    skills = init.get("skills") or init.get("slash_commands") or []
+    print(f"\nskills & commands ({len(skills)}):")
+    for s in skills:
+        print("   ", star(s, my_skills))
+    print("\nplugins:", ", ".join(p.get("name", "?") for p in init.get("plugins") or []) or "none")
+    servers = init.get("mcp_servers") or []
+    print("MCP servers:", ", ".join(f"{s.get('name')} ({s.get('status')})" for s in servers) or "none")
+    hooks = {}
+    for name in ("settings.json", "settings.local.json"):
+        f = sandbox / ".claude" / name
+        if f.exists():
+            for event, entries in json.loads(f.read_text(encoding="utf-8")).get("hooks", {}).items():
+                for entry in entries:
+                    hooks.setdefault(event, []).append(entry.get("matcher") or "*")
+    print("hooks (from settings files):",
+          "; ".join(f"{e} [{', '.join(ms)}]" for e, ms in hooks.items()) or "none")
+
+
+def cmd_check(_: argparse.Namespace) -> None:
+    failures: list[str] = []
+
+    def report(ok: bool, label: str, detail: str = "") -> None:
+        print(f"  {'✔' if ok else '✘'} {label}" + (f"  ({detail})" if detail and not ok else ""))
+        if not ok:
+            failures.append(label)
+
+    print("Files")
+    for path in sorted(REPO.glob("**/*.json")):
+        if ".sandbox" in path.parts or "results" in path.parts or ".git" in path.parts:
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            report(False, f"valid JSON: {path.relative_to(REPO)}", str(exc))
+    for path in sorted(REPO.glob("**/*.py")):
+        if {".sandbox", ".git"} & set(path.parts):
+            continue
+        proc = subprocess.run([sys.executable, "-m", "py_compile", str(path)], capture_output=True, text=True)
+        if proc.returncode:
+            report(False, f"compiles: {path.relative_to(REPO)}", proc.stderr.strip())
+    for d in REPO.glob("**/__pycache__"):
+        if ".sandbox" not in d.parts:
+            shutil.rmtree(d, ignore_errors=True)
+    report(not failures, "every JSON file parses and every Python file compiles")
+
+    print("Labs")
+    for lab in all_labs():
+        m = meta(lab)
+        problems = [k for k in ("title", "kind", "summary") if not m.get(k)]
+        if not (lab / "README.md").is_file():
+            problems.append("README.md")
+        report(not problems, f"{lab.relative_to(REPO)}", "missing: " + ", ".join(problems))
+        if (lab / "tests").is_dir():
+            proc = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests"],
+                                  cwd=lab, capture_output=True, text=True, timeout=300)
+            tail = (proc.stdout + proc.stderr).strip().splitlines()[-1:]
+            report(proc.returncode == 0, f"{lab.name}: lab tests", " ".join(tail))
+
+    print("Lint (frontmatter fields, values, hook events)")
+    lint_count, failures_before = 0, len(failures)
+    for path, kind in lint_targets():
+        if kind in ("settings", "hooks"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            problems = lint_hooks(data.get("hooks", {}))
+        else:
+            problems = lint_markdown(path, kind)
+        lint_count += 1
+        for problem in problems:
+            report(False, f"{path.relative_to(REPO)}: {problem}")
+    clean = len(failures) == failures_before
+    print(f"  {'✔' if clean else '✘'} {lint_count} skill/agent/command/style/settings files linted")
+
+    claude = shutil.which("claude")
+    print("Claude Code validation" + ("" if claude else " (skipped: claude not on PATH)"))
+    if claude:
+        targets = sorted({p.parent for p in REPO.glob("**/.claude-plugin/*.json") if ".sandbox" not in p.parts})
+        targets += [d for d in REPO.glob("*/*/overlay/.claude")
+                    if any((d / sub).is_dir() for sub in ("skills", "agents", "commands"))]
+        for t in targets:
+            target = t.parent if t.name == ".claude-plugin" else t
+            proc = subprocess.run([claude, "plugin", "validate", str(target)], capture_output=True, text=True)
+            out = (proc.stdout + proc.stderr).strip()
+            report(proc.returncode == 0, f"claude plugin validate {target.relative_to(REPO)}", out[-400:])
+
+    print("App baseline & tickets")
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "app"
+        shutil.copytree(REPO / "app", base, ignore=COPY_IGNORE)
+        git(base, "init", "-q")
+        git(base, "add", "-A")
+        git(base, "commit", "-q", "-m", "base")
+        suite = run_unittest(base)
+        expected = ["tests.test_service.TaskBoardTest.test_stats_counts_done_tasks"]
+        report(suite["failed"] == expected, "baseline suite fails only the T01 test", suite["summary"])
+        for test in sorted((TICKETS / "acceptance").glob("test_t*.py")):
+            tid = test.stem.split("_")[1].upper()
+            patch = TICKETS / "reference" / f"{tid}.patch"
+            res = run_acceptance(base, tid)
+            report(res is not None and not res["ok"], f"{tid}: hidden tests fail on the baseline")
+            if not patch.exists():
+                report(False, f"{tid}: reference patch exists")
+                continue
+            applied = git(base, "apply", str(patch), check=False)
+            report(applied.returncode == 0, f"{tid}: reference patch applies", applied.stderr.strip())
+            if applied.returncode == 0:
+                res = run_acceptance(base, tid)
+                after = run_unittest(base)
+                report(bool(res and res["ok"]), f"{tid}: hidden tests pass with the reference",
+                       res["summary"] if res else "")
+                report(set(after["failed"]) <= set(expected), f"{tid}: reference adds no regressions",
+                       ", ".join(after["failed"]))
+            git(base, "checkout", "-q", "--", ".")
+            git(base, "clean", "-fdq")
+
+    print(f"\n{'All checks passed.' if not failures else f'{len(failures)} check(s) failed.'}")
+    sys.exit(1 if failures else 0)
+
+
+def cmd_scaffold(args: argparse.Namespace) -> None:
+    if args.kind not in LAB_ROOTS:
+        die(f"kind must be one of {', '.join(LAB_ROOTS)}")
+    if not re.fullmatch(r"\d{2}-[a-z0-9-]+", args.slug):
+        die("slug must look like 10-my-topic (two digits, then kebab-case)")
+    dest = REPO / args.kind / args.slug
+    if dest.exists():
+        die(f"{dest.relative_to(REPO)} already exists")
+    shutil.copytree(REPO / "templates" / "lab", dest)
+    title = args.slug.split("-", 1)[1].replace("-", " ").capitalize()
+    kind = "concept" if args.kind == "concepts" else "architecture"
+    for f in (dest / "lab.json", dest / "README.md"):
+        f.write_text(f.read_text(encoding="utf-8").replace("{{TITLE}}", title).replace("{{KIND}}", kind),
+                     encoding="utf-8")
+    print(f"✔ Created {dest.relative_to(REPO)}. Next: edit lab.json, README.md and overlay/, then ./lab check")
+
+
+def cmd_clean(args: argparse.Namespace) -> None:
+    boxes = sorted(SANDBOXES.glob("*")) if SANDBOXES.is_dir() else []
+    if not boxes:
+        print("No sandboxes.")
+        return
+    if not args.yes:
+        reply = input(f"Delete {len(boxes)} sandbox(es) in {SANDBOXES}? [y/N] ")
+        if reply.strip().lower() != "y":
+            return
+    for box in boxes:
+        shutil.rmtree(box, ignore_errors=True)
+    print(f"Deleted {len(boxes)} sandbox(es). Results in results/ were kept.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="lab", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list").set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("new")
+    p.add_argument("lab")
+    p.add_argument("--launch", action="store_true", help="start claude in the sandbox right away")
+    p.set_defaults(fn=cmd_new)
+
+    p = sub.add_parser("run")
+    p.add_argument("lab")
+    p.add_argument("--ticket", required=True)
+    p.add_argument("--model", help="main-session model (subagents keep the model in their frontmatter)")
+    p.add_argument("--budget", type=float, default=2.0, help="max USD per run (default 2.0)")
+    p.add_argument("--repeat", type=int, default=1, help="runs are non-deterministic: repeat to compare")
+    p.add_argument("--timeout", type=int, default=1800, help="seconds per run")
+    p.add_argument("--prompt", help="override the lab's run_prompt; {ticket} and {ticket_id} are substituted")
+    p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("compare")
+    p.add_argument("--ticket")
+    p.add_argument("--detail", action="store_true")
+    p.set_defaults(fn=cmd_compare)
+
+    p = sub.add_parser("inspect")
+    p.add_argument("target")
+    p.set_defaults(fn=cmd_inspect)
+
+    sub.add_parser("check").set_defaults(fn=cmd_check)
+
+    p = sub.add_parser("scaffold")
+    p.add_argument("kind")
+    p.add_argument("slug")
+    p.set_defaults(fn=cmd_scaffold)
+
+    p = sub.add_parser("clean")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(fn=cmd_clean)
+
+    args = parser.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

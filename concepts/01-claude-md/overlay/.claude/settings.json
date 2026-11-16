@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest)",
+      "Bash(python3 -m unittest *)",
+      "Bash(python3 -m taskboard *)"
+    ]
+  },
+  "hooks": {
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/log_instructions.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

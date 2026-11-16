@@ -1,0 +1,8 @@
+{
+  "title": "{{TITLE}}",
+  "kind": "{{KIND}}",
+  "summary": "One sentence: what this lab teaches.",
+  "concepts": [],
+  "course": [],
+  "run_prompt": null
+}

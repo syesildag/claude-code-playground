@@ -1,0 +1,11 @@
+# Sandboxes and experiment results are local and disposable
+/.sandbox/
+/results/
+
+# Python
+__pycache__/
+*.pyc
+
+# Personal Claude Code files for this repo (anchored: lab overlays may ship files with these names)
+/.claude/settings.local.json
+/CLAUDE.local.md

@@ -1,0 +1,8 @@
+{
+  "title": "Planner / Executor / Verifier",
+  "kind": "architecture",
+  "summary": "Three cognitive roles: an Opus planner writes the plan and Definition of Done, a Sonnet executor implements it, deterministic gates run, then a verifier in a fresh context judges only the diff against the acceptance criteria.",
+  "concepts": ["separation of roles", "fresh-context verifier", "deterministic gates first", "model routing", "scoped writes hook", "bounded retries"],
+  "course": ["AI Fluent 2 M1", "AI Foundation M3", "AI Fluent 1 M3 (invert the effort)"],
+  "run_prompt": "/pev {ticket}"
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Permissions, modes & prompt injection",
+  "kind": "concept",
+  "summary": "allow/ask/deny rules, permission modes and settings precedence, tested against a prompt injection hidden in a ticket that tries to exfiltrate (fake) secrets, including the Bash bypass that deny rules alone don't stop.",
+  "concepts": ["permissions.allow/ask/deny", "permission modes", "settings precedence", "workspace trust", "prompt injection", "defense in depth"],
+  "course": ["AI Foundation M2 (autonomy levels)", "AI Foundation M4 (data leaks, injection)", "AI Fluent 1 M2 (managed policies)"],
+  "run_prompt": null
+}

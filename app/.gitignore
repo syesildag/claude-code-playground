@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+board.json
+*.html
+_acceptance/
+.claude/logs/
+.claude/settings.local.json
+CLAUDE.local.md

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./lab list)",
+      "Bash(./lab check)",
+      "Bash(./lab new *)",
+      "Bash(./lab scaffold *)",
+      "Bash(./lab compare)",
+      "Bash(./lab compare *)",
+      "Bash(python3 -m unittest *)"
+    ],
+    "ask": [
+      "Bash(./lab run *)",
+      "Bash(./lab inspect *)",
+      "Bash(./lab clean *)"
+    ]
+  }
+}

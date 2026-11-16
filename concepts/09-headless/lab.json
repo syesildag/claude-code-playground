@@ -1,0 +1,8 @@
+{
+  "title": "Headless mode & CI",
+  "kind": "concept",
+  "summary": "Run Claude without a terminal UI: read-only, budget-capped reviews with JSON Schema output that can gate CI, and a live trace of tool calls, cost and cache use from stream-json.",
+  "concepts": ["claude -p", "--output-format json / stream-json", "--json-schema", "--tools", "--max-budget-usd", "--permission-prompts none", "CI gate", "tracing"],
+  "course": ["AI Fluent 1 M5 (headless CI)", "AI Fluent 2 M7 (LLMOps: trace, monitor, evaluate)"],
+  "run_prompt": null
+}

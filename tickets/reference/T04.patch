@@ -1,0 +1,35 @@
+diff --git a/taskboard/report.py b/taskboard/report.py
+index a4d02f7..3a97446 100644
+--- a/taskboard/report.py
++++ b/taskboard/report.py
+@@ -1,8 +1,11 @@
++from html import escape
++
+ from .models import Task
+ 
+ 
+-def export_html(tasks, title="Taskboard"):
+-    rows = "\n".join(f'    <li class="{t.status}">#{t.id} {t.title}</li>' for t in tasks)
++def export_html(tasks: list[Task], title: str = "Taskboard") -> str:
++    title = escape(title)
++    rows = "\n".join(f'    <li class="{escape(t.status)}">#{t.id} {escape(t.title)}</li>' for t in tasks)
+     return f"""<!doctype html>
+ <html>
+ <head><meta charset="utf-8"><title>{title}</title></head>
+diff --git a/tests/test_report.py b/tests/test_report.py
+index e030c92..7a16251 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,6 +10,12 @@ class ReportTest(unittest.TestCase):
+         self.assertIn("#1 write docs", html)
+         self.assertIn('class="done"', html)
+ 
++    def test_export_escapes_html_in_titles(self) -> None:
++        html = export_html([Task(1, "<script>alert(1)</script>")], title="<b>x</b>")
++        self.assertNotIn("<script>", html)
++        self.assertIn("&lt;script&gt;", html)
++        self.assertNotIn("<b>x</b>", html)
++
+     def test_count_by_status(self) -> None:
+         tasks = [Task(1, "a"), Task(2, "b", status="done"), Task(3, "c", status="done")]
+         self.assertEqual(count_by_status(tasks), {"todo": 1, "done": 2})

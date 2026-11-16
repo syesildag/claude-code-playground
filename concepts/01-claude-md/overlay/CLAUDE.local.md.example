@@ -1,0 +1,6 @@
+# Personal, uncommitted preferences
+
+Copy this file to CLAUDE.local.md. It is gitignored and loads after CLAUDE.md, so it has the last word for you only.
+
+- Keep answers short. Show the diff, not a summary of it.
+- My scratch data lives in /tmp/my-board.json. Use `--db /tmp/my-board.json` when you try the CLI.

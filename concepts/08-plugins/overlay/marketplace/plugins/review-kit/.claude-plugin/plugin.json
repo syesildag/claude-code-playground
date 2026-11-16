@@ -1,0 +1,9 @@
+{
+  "name": "review-kit",
+  "displayName": "Review Kit",
+  "version": "1.0.0",
+  "description": "A five-point review skill, an independent reviewer agent and a destructive-SQL policy hook",
+  "author": { "name": "Claude Code Lab" },
+  "license": "MIT",
+  "keywords": ["review", "policy"]
+}

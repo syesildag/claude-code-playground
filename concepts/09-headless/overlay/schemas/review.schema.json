@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": { "type": "string", "enum": ["approve", "request_changes"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["blocking", "minor", "note"] },
+          "location": { "type": "string", "description": "file:line" },
+          "issue": { "type": "string" },
+          "fix": { "type": "string" }
+        },
+        "required": ["severity", "location", "issue"]
+      }
+    }
+  },
+  "required": ["verdict", "findings"]
+}

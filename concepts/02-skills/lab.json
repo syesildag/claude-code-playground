@@ -1,0 +1,8 @@
+{
+  "title": "Skills",
+  "kind": "concept",
+  "summary": "Five skills that each show one capability: auto-triggering by description, manual-only with arguments and supporting files, live data injection, running in a forked subagent, and model-only background knowledge.",
+  "concepts": ["SKILL.md", "description as activation condition", "disable-model-invocation", "user-invocable", "$ARGUMENTS", "${CLAUDE_SKILL_DIR}", "!`command` injection", "allowed-tools", "context: fork", "paths", "legacy commands"],
+  "course": ["AI Fluent 1 M4", "AI Fluent 2 M4"],
+  "run_prompt": null
+}

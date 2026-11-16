@@ -1,0 +1,8 @@
+{
+  "title": "Gated TDD workflow",
+  "kind": "architecture",
+  "summary": "A Markdown orchestrator runs RED → GREEN → cold REVIEW → PROOF with deterministic stop gates (scripts/gate.py) between phases, per-phase models (Haiku, Sonnet, Opus), scoped writes per role, and a Stop hook that won't end the session without a proof page.",
+  "concepts": ["stop gates", "observable proof", "TDD", "model per phase", "cold reviewer", "Stop hook as workflow guard", "capitalization"],
+  "course": ["AI Fluent 2 M5 (orchestrator agents)", "AI Fluent 1 M7 (quality control, proof)"],
+  "run_prompt": "/tdd {ticket}"
+}

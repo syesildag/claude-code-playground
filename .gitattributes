@@ -1,0 +1,3 @@
+# Hook scripts, shell scripts and patches must keep LF endings even when core.autocrlf=true.
+* text=auto eol=lf
+*.patch -text

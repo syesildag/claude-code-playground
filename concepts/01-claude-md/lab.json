@@ -1,0 +1,8 @@
+{
+  "title": "CLAUDE.md & context engineering",
+  "kind": "concept",
+  "summary": "How instruction files load (eager imports, lazy nested files, path-scoped rules), what belongs in them, and what happens when they contradict the code.",
+  "concepts": ["CLAUDE.md", "@imports", ".claude/rules", "nested CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "InstructionsLoaded hook", "canary"],
+  "course": ["AI Foundation M1-M2", "AI Fluent 1 M1-M2", "AI Fluent 1 M7 (canary)"],
+  "run_prompt": "Implement the ticket described in {ticket}. Verify your work against its acceptance criteria before finishing."
+}

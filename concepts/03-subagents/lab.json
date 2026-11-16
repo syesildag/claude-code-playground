@@ -1,0 +1,8 @@
+{
+  "title": "Subagents",
+  "kind": "concept",
+  "summary": "Specialists with their own context window, tools and model: a read-only explorer, a test runner fenced in by its own hook, a security reviewer with a preloaded skill, and a doc keeper with persistent memory.",
+  "concepts": ["subagent frontmatter", "tools allowlist", "model per agent", "agent-scoped hooks", "skills preloading", "memory: project", "@-mention", "--agent", "context isolation"],
+  "course": ["AI Fluent 1 M3-M4", "AI Fluent 2 M1-M2"],
+  "run_prompt": null
+}

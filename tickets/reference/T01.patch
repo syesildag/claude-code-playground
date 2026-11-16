@@ -1,0 +1,11 @@
+diff --git a/taskboard/service.py b/taskboard/service.py
+index 501a658..54f79ce 100644
+--- a/taskboard/service.py
++++ b/taskboard/service.py
+@@ -51,5 +51,5 @@ class TaskBoard:
+ 
+     def stats(self) -> dict[str, int]:
+         tasks = self.store.load()
+-        done = sum(1 for t in tasks if t.status == "complete")
++        done = sum(1 for t in tasks if t.status == "done")
+         return {"total": len(tasks), "done": done, "open": len(tasks) - done}

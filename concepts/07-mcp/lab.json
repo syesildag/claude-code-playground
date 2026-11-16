@@ -1,0 +1,8 @@
+{
+  "title": "MCP servers",
+  "kind": "concept",
+  "summary": "A hand-written stdio MCP server (stdlib Python, about 150 lines) that gives Claude taskboard tools and a slash-command prompt, plus scopes, approval and permission rules for MCP tools.",
+  "concepts": [".mcp.json", "stdio transport", "JSON-RPC", "tools", "prompts", "mcp__server__tool naming", "project server approval", "MCP supply-chain risk"],
+  "course": ["AI Fluent 1 M1 (agents acting on the information system)", "AI Foundation M4 (MCP as attack vector)"],
+  "run_prompt": null
+}

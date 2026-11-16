@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest)",
+      "Bash(python3 -m unittest *)",
+      "Bash(python3 -m taskboard *)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.py\"",
+    "padding": 1
+  }
+}

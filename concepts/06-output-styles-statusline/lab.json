@@ -1,0 +1,8 @@
+{
+  "title": "Output styles & status line",
+  "kind": "concept",
+  "summary": "Change how Claude talks for a whole session (a Socratic tutor, a findings-only reviewer) and keep model, context use and cost visible in a custom status line.",
+  "concepts": ["output styles", "keep-coding-instructions", "/output-style", "statusLine", "context window monitoring"],
+  "course": ["AI Foundation M2 (/statusline, /context)", "AI Fluent 1 M3 (cost awareness)"],
+  "run_prompt": null
+}

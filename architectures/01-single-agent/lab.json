@@ -1,0 +1,8 @@
+{
+  "title": "Single agent (control group)",
+  "kind": "architecture",
+  "summary": "One agent, a short CLAUDE.md, no subagents, skills or hooks. The baseline every other architecture must beat on acceptance, cost or turns.",
+  "concepts": ["baseline", "ReAct loop", "control group"],
+  "course": ["AI Fluent 2 M2 (default to a single agent)", "AI Foundation M1"],
+  "run_prompt": "Implement the ticket described in {ticket}. Verify your work against its acceptance criteria before finishing."
+}

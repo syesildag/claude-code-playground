@@ -1,0 +1,3 @@
+- Never edit an existing test to make it pass.
+- Status names come only from `STATUSES` in `taskboard/models.py`.
+- Run `python3 -m unittest` before you say you're done.

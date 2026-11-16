@@ -1,0 +1,8 @@
+{
+  "title": "Hooks: deterministic gates",
+  "kind": "concept",
+  "summary": "Eight hook scripts across the agent lifecycle: inject context at start, guard prompts, deny dangerous commands, protect tests and secrets, check edits, refuse to stop while tests are red, and observe everything.",
+  "concepts": ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "exit code 2", "permissionDecision", "decision: block", "if filter", "stop_hook_active", "git pre-commit"],
+  "course": ["AI Fluent 1 M1 (gates, secret scanning)", "AI Fluent 1 M4-M5", "AI Foundation M4"],
+  "run_prompt": "Implement the ticket described in {ticket}. Verify your work against its acceptance criteria before finishing."
+}

@@ -1,0 +1,33 @@
+# Example only: not run by this lab. A PR gate that runs the same headless review in CI.
+# Needs a repository secret ANTHROPIC_API_KEY (consumer subscriptions can't be used in CI).
+name: claude-review
+on:
+  pull_request:
+    paths: ["taskboard/**"]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the diff below needs the base branch
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Deterministic gates first (cheap)
+        run: python3 -m unittest
+      - name: Headless review (read-only, budget-capped, structured output)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: sonnet
+          BUDGET: "0.50"
+          BASE_REF: ${{ github.base_ref }}   # via env, never interpolated into the script
+        run: |
+          for f in $(git diff --name-only "origin/${BASE_REF}..." -- 'taskboard/*.py'); do
+            bash scripts/headless-review.sh "$f"
+          done

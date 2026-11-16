@@ -1,0 +1,14 @@
+{
+  "name": "lab-tools",
+  "description": "Internal plugin marketplace for the Claude Code lab",
+  "owner": { "name": "Claude Code Lab" },
+  "plugins": [
+    {
+      "name": "review-kit",
+      "source": "./plugins/review-kit",
+      "description": "A five-point review skill, an independent reviewer agent and a destructive-SQL policy hook",
+      "category": "quality",
+      "tags": ["review", "policy"]
+    }
+  ]
+}

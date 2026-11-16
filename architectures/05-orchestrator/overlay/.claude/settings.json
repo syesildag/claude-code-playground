@@ -1,0 +1,14 @@
+{
+  "agent": "orchestrator",
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m unittest)",
+      "Bash(python3 -m unittest *)",
+      "Bash(python3 -m taskboard *)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git status *)"
+    ]
+  }
+}
