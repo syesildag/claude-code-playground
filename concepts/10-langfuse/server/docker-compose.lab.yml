@@ -1,0 +1,19 @@
+# Lab override for the upstream docker-compose.yml. Applied as the second -f file by `./lab langfuse up`.
+#
+# Upstream publishes the web UI (3000), the AI gateway (3031) and the MinIO S3 API (9090) on ALL network
+# interfaces. This lab keeps every port on localhost: traces contain your prompts and code.
+# `!override` replaces the service's whole port list (a plain override would append to it and keep the public
+# binding). Requires Docker Compose v2.24 or later.
+services:
+  langfuse-web:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+
+  langfuse-ai-gateway:
+    ports: !override
+      - "127.0.0.1:3031:3031"
+
+  minio:
+    ports: !override
+      - "127.0.0.1:9090:9000"
+      - "127.0.0.1:9091:9001"
