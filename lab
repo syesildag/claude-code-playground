@@ -306,16 +306,30 @@ def tracing_preflight() -> dict[str, str]:
         die("Langfuse isn't running. Start it with: ./lab langfuse up")
     if not lf.runtime_ok():
         die("The Langfuse plugin needs uv. Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh")
-    return lf.read_env(lf.ENV_FILE)
+    env = lf.read_env(lf.ENV_FILE)
+    if not lf.keys_ok(env):  # fail before a paid run, not after it
+        die("Langfuse rejected the lab's API keys: server/.env doesn't match its database. "
+            "Run ./lab langfuse down --wipe, then ./lab langfuse up.")
+    return env
 
 
-def enable_plugin(sandbox: Path, run=subprocess.run) -> str:
+def enable_plugin(sandbox: Path, run=subprocess.run, installed=lf.plugin_installed) -> str:
     """Enable Langfuse's official plugin for this sandbox only (local scope), never for the whole account.
-    Returns how: "install" (claude plugin install --scope local) or "settings" (fallback: enabledPlugins)."""
-    proc = run([shutil.which("claude") or "claude", "plugin", "install", lf.PLUGIN_ID, "--scope", "local", "--json"],
-               cwd=sandbox, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
-    if proc.returncode == 0:
-        return "install"
+    Returns how: "install" (claude plugin install --scope local) or "settings" (fallback: enabledPlugins, only when
+    the plugin is already downloaded). Stops when neither can work, so a paid run never starts untraceable."""
+    print(f"Enabling {lf.PLUGIN_ID.split('@')[0]} for this sandbox (local scope)…", flush=True)
+    cmd = [shutil.which("claude") or "claude", "plugin", "install", lf.PLUGIN_ID, "--scope", "local", "--json"]
+    try:
+        proc = run(cmd, cwd=sandbox, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+        if proc.returncode == 0:
+            return "install"
+        detail = (proc.stderr or proc.stdout or "").strip()[-400:]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        detail = str(exc)
+    if not installed():
+        die(f"couldn't install {lf.PLUGIN_ID} for this sandbox: {detail or 'no details'}\n"
+            f"Try it yourself inside the sandbox: claude plugin install {lf.PLUGIN_ID} --scope local")
+    print(f"  install command failed ({detail or 'no details'}); enabling the already downloaded plugin instead")
     merge_json_file(sandbox / ".claude" / "settings.local.json", {"enabledPlugins": {lf.PLUGIN_ID: True}})
     return "settings"
 
@@ -715,6 +729,10 @@ def cmd_langfuse(args: argparse.Namespace) -> None:
         return
 
     # up
+    if not lf.ENV_FILE.exists():
+        conflict = lf.env_volume_conflict(env_exists=False, volumes=lf.project_volumes())
+        if conflict:
+            die(conflict)
     env, created = lf.ensure_env()
     if created:
         print(f"✔ Generated {lf.ENV_FILE.relative_to(REPO)} (random secrets, gitignored, mode 600)")

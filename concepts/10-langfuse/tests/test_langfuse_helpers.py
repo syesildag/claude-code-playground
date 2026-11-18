@@ -129,7 +129,7 @@ class ServiceTest(unittest.TestCase):
 
 class TraceLookupTest(unittest.TestCase):
     def test_find_traces_polls_until_data(self) -> None:
-        responses = iter([{"data": []}, {"data": [{"id": "t"}]}])
+        responses = iter([{"data": []}, {"data": [{"id": "t"}]}, {"data": [{"id": "t"}]}])
         calls = []
 
         def fake_api(env, method, path, body=None, base_url=lf.BASE_URL):
@@ -138,7 +138,7 @@ class TraceLookupTest(unittest.TestCase):
 
         traces = lf.find_traces(lf.generate_env(), "sess-1", timeout=60, api=fake_api, sleep=lambda s: None)
         self.assertEqual(traces, [{"id": "t"}])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)  # empty, first data, same count again = stable
         # Langfuse v4 ("events_only" mode) only serves reads through the v2 observations API.
         self.assertTrue(calls[0].startswith("/api/public/v2/observations?"), calls[0])
         self.assertIn("sessionId=sess-1", calls[0])
@@ -153,6 +153,26 @@ class TraceLookupTest(unittest.TestCase):
 
         self.assertEqual(lf.find_traces(lf.generate_env(), "s", timeout=0, api=down, sleep=lambda s: None), [])
 
+    def test_find_traces_waits_until_count_is_stable(self) -> None:
+        responses = iter([{"data": []}, {"data": [{"id": "a"}]}, {"data": [{"id": "a"}, {"id": "b"}]},
+                          {"data": [{"id": "a"}, {"id": "b"}]}])
+        fake_api = lambda env, method, path, body=None, base_url=lf.BASE_URL: next(responses)  # noqa: E731
+        traces = lf.find_traces(lf.generate_env(), "s", timeout=60, api=fake_api, sleep=lambda s: None)
+        self.assertEqual([t["id"] for t in traces], ["a", "b"])
+
+    def test_find_traces_follows_cursor(self) -> None:
+        calls = []
+
+        def paged(env, method, path, body=None, base_url=lf.BASE_URL):
+            calls.append(path)
+            if "cursor=c2" in path:
+                return {"data": [{"id": "b"}], "meta": {}}
+            return {"data": [{"id": "a"}], "meta": {"cursor": "c2"}}
+
+        traces = lf.find_traces(lf.generate_env(), "s", timeout=60, api=paged, sleep=lambda s: None)
+        self.assertEqual([t["id"] for t in traces], ["a", "b"])
+        self.assertTrue(any("cursor=c2" in c for c in calls))
+
     def test_count_traces_counts_distinct_trace_ids(self) -> None:
         observations = [{"id": "o1", "traceId": "t1"}, {"id": "o2", "traceId": "t1"}, {"id": "o3", "traceId": "t2"}]
         self.assertEqual(lf.count_traces(observations), 2)
@@ -162,6 +182,23 @@ class TraceLookupTest(unittest.TestCase):
         message = lf.trace_warning("sess-9")
         self.assertIn("sess-9", message)
         self.assertIn(lf.HOOK_LOG, message)
+
+
+class EnvSafetyTest(unittest.TestCase):
+    def test_missing_env_with_existing_volumes_is_a_conflict(self) -> None:
+        message = lf.env_volume_conflict(env_exists=False, volumes=["server_langfuse_postgres_data"])
+        self.assertIn("down --wipe", message)
+
+    def test_no_conflict_when_env_exists_or_no_volumes(self) -> None:
+        self.assertIsNone(lf.env_volume_conflict(env_exists=True, volumes=["v"]))
+        self.assertIsNone(lf.env_volume_conflict(env_exists=False, volumes=[]))
+
+    def test_keys_ok(self) -> None:
+        def unauthorized(env, method, path, body=None, base_url=lf.BASE_URL):
+            raise urllib.error.HTTPError(lf.BASE_URL + path, 401, "Unauthorized", {}, None)
+
+        self.assertFalse(lf.keys_ok(lf.generate_env(), api=unauthorized))
+        self.assertTrue(lf.keys_ok(lf.generate_env(), api=lambda *a, **k: {"data": [{"id": "p"}]}))
 
 
 if __name__ == "__main__":

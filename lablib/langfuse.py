@@ -207,24 +207,42 @@ def post_scores(env: dict[str, str], payloads: list[dict], api: Callable = api) 
     return errors
 
 
+def _fetch_all(env: dict[str, str], path: str, api: Callable, max_items: int = 1000) -> list[dict]:
+    """Follow the v2 API's cursor so counts aren't capped at one page."""
+    items: list[dict] = []
+    cursor = None
+    while True:
+        page = api(env, "GET", path + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+        items += page.get("data") or []
+        cursor = (page.get("meta") or {}).get("cursor")
+        if not cursor or len(items) >= max_items:
+            return items
+
+
 def find_traces(env: dict[str, str], session_id: str, timeout: float = 60, api: Callable = api,
                 sleep: Callable[[float], None] = time.sleep) -> list[dict]:
     """Observations (model calls, tool calls, turns) Langfuse has for a Claude session.
 
     Langfuse v4 runs in "events_only" mode: the old /api/public/traces and /sessions reads return 404 and reads
     go through /api/public/v2/observations. The plugin uploads from its Stop/SessionEnd hook and Langfuse ingests
-    asynchronously, so poll every 5 s until something arrives or `timeout` runs out. API errors count as "nothing
-    yet": a lookup must never crash the run that called it. Use count_traces() for the number of traces."""
+    asynchronously, so poll every 5 s and return once two polls in a row see the same non-zero count (or when
+    `timeout` runs out: the result is then a lower bound). API errors count as "no new data": a lookup must never
+    crash the run that called it. Use count_traces() for the number of traces."""
     path = (f"/api/public/v2/observations?sessionId={urllib.parse.quote(session_id)}"
-            "&limit=50&fields=core,basic,usage,trace_context")
+            "&limit=100&fields=core,basic,usage,trace_context")
     deadline = time.monotonic() + timeout
+    data: list[dict] = []
+    last_count = None
     while True:
         try:
-            data = api(env, "GET", path).get("data") or []
-        except Exception:  # noqa: BLE001
-            data = []
-        if data or time.monotonic() >= deadline:
+            data = _fetch_all(env, path, api)
+        except Exception:  # noqa: BLE001 - keep what we had
+            pass
+        if data and len(data) == last_count:
             return data
+        if time.monotonic() >= deadline:
+            return data
+        last_count = len(data) if data else None
         sleep(5)
 
 
@@ -236,3 +254,34 @@ def count_traces(observations: list[dict]) -> int:
 def trace_warning(session_id: str) -> str:
     return (f"⚠ No Langfuse traces for session {session_id}. The plugin's hook may not have run: check "
             f"{HOOK_LOG} (set CC_LANGFUSE_DEBUG=true for detail) and `./lab langfuse status`.")
+
+
+def project_volumes() -> list[str]:
+    """Docker volumes that belong to this compose project (they survive `down`, and hold the database)."""
+    try:
+        config = json.loads(compose("config", "--format", "json", capture=True).stdout or "{}")
+        name = config.get("name")
+        if not name:
+            return []
+        out = subprocess.run(["docker", "volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={name}"],
+                             capture_output=True, text=True, timeout=30).stdout
+        return out.split()
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return []
+
+
+def env_volume_conflict(env_exists: bool, volumes: list[str]) -> str | None:
+    """A new .env can't open an existing database: Postgres and Langfuse keep the secrets of their first boot."""
+    if env_exists or not volumes:
+        return None
+    return ("server/.env is missing but Langfuse's data volumes still exist, so a new .env would not match the "
+            "database (Postgres would reject the new password). Run `./lab langfuse down --wipe`, then "
+            "`./lab langfuse up`, or restore the old .env.")
+
+
+def keys_ok(env: dict[str, str], api: Callable = api) -> bool:
+    """True when Langfuse accepts the lab's API keys (checked before a paid traced run, not after)."""
+    try:
+        return bool(api(env, "GET", "/api/public/projects").get("data"))
+    except Exception:  # noqa: BLE001 - 401, network error: either way the keys can't be used
+        return False

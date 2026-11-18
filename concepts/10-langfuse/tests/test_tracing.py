@@ -1,6 +1,8 @@
 """Offline tests for the --trace wiring in ./lab: no Claude, no Langfuse, no Docker."""
 
+import contextlib
 import importlib.machinery
+import io
 import importlib.util
 import json
 import subprocess
@@ -46,17 +48,37 @@ class TracingTest(unittest.TestCase):
             seen.update(cmd=cmd, cwd=kwargs.get("cwd"), stdin=kwargs.get("stdin"))
             return subprocess.CompletedProcess(cmd, 0, "{}", "")
 
-        self.assertEqual(lab.enable_plugin(self.sandbox, run=ok_run), "install")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(lab.enable_plugin(self.sandbox, run=ok_run), "install")
+        self.assertIn("Enabling langfuse-observability", out.getvalue())
         self.assertEqual(seen["cmd"][1:], ["plugin", "install", lf.PLUGIN_ID, "--scope", "local", "--json"])
         self.assertEqual(seen["cwd"], self.sandbox)
         self.assertEqual(seen["stdin"], subprocess.DEVNULL)
 
     def test_enable_plugin_falls_back_to_settings(self) -> None:
         failing = lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, "", "nope")  # noqa: E731
-        self.assertEqual(lab.enable_plugin(self.sandbox, run=failing), "settings")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lab.enable_plugin(self.sandbox, run=failing, installed=lambda: True), "settings")
         saved = json.loads(self.settings.read_text(encoding="utf-8"))
         self.assertIs(saved["enabledPlugins"][lf.PLUGIN_ID], True)
         self.assertEqual(saved["claudeMdExcludes"], ["x"])
+
+    def test_enable_plugin_stops_when_install_fails_and_plugin_unknown(self) -> None:
+        failing = lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, "", "network unreachable")  # noqa: E731
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                lab.enable_plugin(self.sandbox, run=failing, installed=lambda: False)
+        self.assertIn("network unreachable", err.getvalue())
+        self.assertNotIn("enabledPlugins", json.loads(self.settings.read_text(encoding="utf-8")))
+
+    def test_enable_plugin_survives_install_timeout(self) -> None:
+        def slow(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 300)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lab.enable_plugin(self.sandbox, run=slow, installed=lambda: True), "settings")
 
 
 if __name__ == "__main__":

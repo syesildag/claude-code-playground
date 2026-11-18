@@ -83,6 +83,7 @@ whether `accepted` is 1.
 - **Tokens vs cache:** most input tokens of a turn are *cache reads*. A sudden jump in uncached input points to
   a changed prompt prefix.
 - **Tool loops:** the same `Tool: Read` on one file several times usually means the agent lacked context.
+- **Counts in `results/*.json`:** `langfuse_observations` and `langfuse_traces` are read once two polls agree (ingestion is asynchronous). If Langfuse is still ingesting when the 60 s lookup ends, they're a lower bound.
 - **Cost:** Langfuse shows a cost only for models it has a price for. A model as new as `claude-haiku-5-5` may show
   none. Claude Code's own figure is in `results/*.json` (`cost_usd`, `cost_by_model`).
 
@@ -107,7 +108,9 @@ whether `accepted` is 1.
 | `Docker isn't reachable` | Start Docker Desktop. On WSL, turn *WSL integration → Ubuntu* off and on again if `/var/run/docker.sock` is missing |
 | `these ports are already in use: …` | Something else listens there: `ss -ltnp`, or on Windows `netstat -ano`. We already moved MinIO to 9190 because of Cockpit |
 | `⚠ No Langfuse traces for session …` | The plugin hook didn't upload. Check `~/.claude/state/langfuse_hook.log`, set `CC_LANGFUSE_DEBUG=true`, and run `./lab langfuse status` (runtime, health) |
-| A 401 after re-creating `.env` | Langfuse creates keys only on its first boot. `./lab langfuse down --wipe`, then `up` |
+| `server/.env is missing but Langfuse's data volumes still exist` (from `up`) | `.env` was deleted (for example by `git clean -fdX`) while the database survived. A new `.env` can't open it: restore the old file, or `./lab langfuse down --wipe`, then `up` |
+| `Langfuse rejected the lab's API keys` (from `--trace`) | Same cause, caught before a paid run starts: `./lab langfuse down --wipe`, then `up` |
+| `couldn't install langfuse-observability for this sandbox` | The plugin install failed (often no network) and the plugin isn't downloaded yet. The message shows Claude Code's error. Retry, or run the printed command inside the sandbox |
 
 ## Teardown
 `./lab langfuse down` stops everything and keeps the data. `./lab langfuse down --wipe` also deletes all traces and
