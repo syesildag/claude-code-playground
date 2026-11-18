@@ -127,5 +127,42 @@ class ServiceTest(unittest.TestCase):
         self.assertIn("connection refused", errors[0])
 
 
+class TraceLookupTest(unittest.TestCase):
+    def test_find_traces_polls_until_data(self) -> None:
+        responses = iter([{"data": []}, {"data": [{"id": "t"}]}])
+        calls = []
+
+        def fake_api(env, method, path, body=None, base_url=lf.BASE_URL):
+            calls.append(path)
+            return next(responses)
+
+        traces = lf.find_traces(lf.generate_env(), "sess-1", timeout=60, api=fake_api, sleep=lambda s: None)
+        self.assertEqual(traces, [{"id": "t"}])
+        self.assertEqual(len(calls), 2)
+        # Langfuse v4 ("events_only" mode) only serves reads through the v2 observations API.
+        self.assertTrue(calls[0].startswith("/api/public/v2/observations?"), calls[0])
+        self.assertIn("sessionId=sess-1", calls[0])
+
+    def test_find_traces_times_out_empty(self) -> None:
+        empty = lambda env, method, path, body=None, base_url=lf.BASE_URL: {"data": []}  # noqa: E731
+        self.assertEqual(lf.find_traces(lf.generate_env(), "s", timeout=0, api=empty, sleep=lambda s: None), [])
+
+    def test_find_traces_survives_api_errors(self) -> None:
+        def down(env, method, path, body=None, base_url=lf.BASE_URL):
+            raise urllib.error.URLError("connection refused")
+
+        self.assertEqual(lf.find_traces(lf.generate_env(), "s", timeout=0, api=down, sleep=lambda s: None), [])
+
+    def test_count_traces_counts_distinct_trace_ids(self) -> None:
+        observations = [{"id": "o1", "traceId": "t1"}, {"id": "o2", "traceId": "t1"}, {"id": "o3", "traceId": "t2"}]
+        self.assertEqual(lf.count_traces(observations), 2)
+        self.assertEqual(lf.count_traces([]), 0)
+
+    def test_trace_warning_mentions_hook_log(self) -> None:
+        message = lf.trace_warning("sess-9")
+        self.assertIn("sess-9", message)
+        self.assertIn(lf.HOOK_LOG, message)
+
+
 if __name__ == "__main__":
     unittest.main()

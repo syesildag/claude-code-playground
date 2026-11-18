@@ -13,6 +13,8 @@ import secrets
 import shutil
 import socket
 import subprocess
+import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -203,3 +205,34 @@ def post_scores(env: dict[str, str], payloads: list[dict], api: Callable = api) 
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{payload.get('name')}: {exc}")
     return errors
+
+
+def find_traces(env: dict[str, str], session_id: str, timeout: float = 60, api: Callable = api,
+                sleep: Callable[[float], None] = time.sleep) -> list[dict]:
+    """Observations (model calls, tool calls, turns) Langfuse has for a Claude session.
+
+    Langfuse v4 runs in "events_only" mode: the old /api/public/traces and /sessions reads return 404 and reads
+    go through /api/public/v2/observations. The plugin uploads from its Stop/SessionEnd hook and Langfuse ingests
+    asynchronously, so poll every 5 s until something arrives or `timeout` runs out. API errors count as "nothing
+    yet": a lookup must never crash the run that called it. Use count_traces() for the number of traces."""
+    path = (f"/api/public/v2/observations?sessionId={urllib.parse.quote(session_id)}"
+            "&limit=50&fields=core,basic,usage,trace_context")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            data = api(env, "GET", path).get("data") or []
+        except Exception:  # noqa: BLE001
+            data = []
+        if data or time.monotonic() >= deadline:
+            return data
+        sleep(5)
+
+
+def count_traces(observations: list[dict]) -> int:
+    """Distinct traces among observations (the plugin writes one trace per conversational turn)."""
+    return len({o.get("traceId") or o.get("id") for o in observations})
+
+
+def trace_warning(session_id: str) -> str:
+    return (f"⚠ No Langfuse traces for session {session_id}. The plugin's hook may not have run: check "
+            f"{HOOK_LOG} (set CC_LANGFUSE_DEBUG=true for detail) and `./lab langfuse status`.")

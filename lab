@@ -427,6 +427,17 @@ def cmd_run(args: argparse.Namespace) -> None:
             "acceptance": acceptance, "accepted": bool(acceptance and acceptance["ok"]),
             "result_text": (result.get("result") or "")[-2000:], "stderr": stderr[-2000:],
         }
+        if plugin_env is not None and record["session_id"]:
+            # Neither helper raises: a Langfuse problem must never lose the run's result.
+            session = record["session_id"]
+            observations = lf.find_traces(lf_env, session)
+            record.update(langfuse_traces=lf.count_traces(observations), langfuse_observations=len(observations),
+                          langfuse_errors=[], langfuse_session_url=None)
+            if observations:
+                summary = acceptance["summary"] if acceptance else "no hidden acceptance tests"
+                record["langfuse_errors"] = lf.post_scores(
+                    lf_env, lf.score_payloads(session, record["accepted"], len(record["regressions"]), summary))
+                record["langfuse_session_url"] = lf.session_url(lf_env, session)
         out = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}_{lab.name}_{ticket_id}_{i}.json"
         out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 
@@ -439,6 +450,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         if record["cost_by_model"]:
             print("  cost by model: " + ", ".join(f"{k} ${v:.3f}" for k, v in record["cost_by_model"].items()
                                                   if isinstance(v, (int, float))))
+        if plugin_env is not None:
+            if record.get("langfuse_traces"):
+                print(f"  langfuse: {record['langfuse_traces']} trace(s) → {record['langfuse_session_url']}")
+                for error in record["langfuse_errors"]:
+                    print(f"  ⚠ score not saved: {error}")
+            else:
+                print("  " + lf.trace_warning(record["session_id"] or "?"))
         if code != 0:
             print(f"  claude exited with {code}: {stderr.strip()[-300:]}")
         print(f"  → {out.relative_to(REPO)}")
