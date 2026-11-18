@@ -298,6 +298,36 @@ def need_claude() -> str:
     return exe
 
 
+# ----------------------------------------------------------------------------- tracing (--trace)
+
+def tracing_preflight() -> dict[str, str]:
+    """Checks before a traced sandbox is built. Never installs anything: it stops with the command to run."""
+    if not lf.ENV_FILE.exists() or not lf.healthy():
+        die("Langfuse isn't running. Start it with: ./lab langfuse up")
+    if not lf.runtime_ok():
+        die("The Langfuse plugin needs uv. Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh")
+    return lf.read_env(lf.ENV_FILE)
+
+
+def enable_plugin(sandbox: Path, run=subprocess.run) -> str:
+    """Enable Langfuse's official plugin for this sandbox only (local scope), never for the whole account.
+    Returns how: "install" (claude plugin install --scope local) or "settings" (fallback: enabledPlugins)."""
+    proc = run([shutil.which("claude") or "claude", "plugin", "install", lf.PLUGIN_ID, "--scope", "local", "--json"],
+               cwd=sandbox, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+    if proc.returncode == 0:
+        return "install"
+    merge_json_file(sandbox / ".claude" / "settings.local.json", {"enabledPlugins": {lf.PLUGIN_ID: True}})
+    return "settings"
+
+
+def apply_tracing(sandbox: Path, env: dict[str, str], tags: str, enable=enable_plugin) -> dict[str, str]:
+    """Enable the plugin in the sandbox and point it at the local Langfuse. Returns the plugin's env vars."""
+    enable(sandbox)
+    plugin = lf.plugin_env(env, tags)
+    merge_json_file(sandbox / ".claude" / "settings.local.json", {"env": plugin})
+    return plugin
+
+
 # ----------------------------------------------------------------------------- commands
 
 def cmd_list(_: argparse.Namespace) -> None:
@@ -314,13 +344,20 @@ def cmd_list(_: argparse.Namespace) -> None:
 
 def cmd_new(args: argparse.Namespace) -> None:
     lab = find_lab(args.lab)
-    sandbox = make_sandbox(lab)
-    rel = os.path.relpath(sandbox, Path.cwd())
     m = meta(lab)
+    traced = bool(args.trace or m.get("trace"))
+    env = tracing_preflight() if traced else None  # before building anything
+    sandbox = make_sandbox(lab)
+    tags = lf.trace_tags(lab.name, m.get("kind")) if traced else ""
+    if traced:
+        apply_tracing(sandbox, env, tags)
+    rel = os.path.relpath(sandbox, Path.cwd())
     print(f"✔ Sandbox for {lab.relative_to(REPO)}: {m.get('title', '')}")
     print(f"  {sandbox}\n")
     print(f"  cd {rel}")
     print(f"  claude {' '.join(CLEAN_ROOM)}\n")
+    if traced:
+        print(f"  traced → {lf.BASE_URL} (tags: {tags})")
     print(f"  Lesson: {lab.relative_to(REPO)}/README.md")
     if args.launch:
         os.chdir(sandbox)
@@ -337,9 +374,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     ticket = find_ticket(args.ticket)
     ticket_id = ticket.name.split("-")[0]
     RESULTS.mkdir(exist_ok=True)
+    lf_env = tracing_preflight() if (args.trace or m.get("trace")) else None  # before building anything
 
     for i in range(1, args.repeat + 1):
         sandbox = make_sandbox(lab, tag=f"run-{ticket_id}")
+        plugin_env = None
+        if lf_env is not None:
+            tags = lf.trace_tags(lab.name, m.get("kind"), ticket=ticket_id, model=args.model or "default", run=i)
+            plugin_env = apply_tracing(sandbox, lf_env, tags)
         # A fresh sandbox is an untrusted workspace: Claude Code ignores allow rules from the committed
         # .claude/settings.json until someone accepts the trust dialog (hooks and deny rules still apply).
         # Rules passed with --settings are honoured, so the lab's own allow rules are forwarded that way.
@@ -357,8 +399,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"▶ [{i}/{args.repeat}] {lab.name} × {ticket_id}  (sandbox: {sandbox.name})", flush=True)
         started = time.time()
         try:
+            # Hooks inherit Claude's environment, so the plugin gets its settings without relying on folder trust.
             proc = subprocess.run(cmd, cwd=sandbox, capture_output=True, text=True, timeout=args.timeout,
-                                  stdin=subprocess.DEVNULL)
+                                  stdin=subprocess.DEVNULL, env={**os.environ, **plugin_env} if plugin_env else None)
             stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
         except subprocess.TimeoutExpired as exc:
             stdout, stderr, code = exc.stdout or "", f"timeout after {args.timeout}s", -1
@@ -688,6 +731,7 @@ def main() -> None:
     p = sub.add_parser("new")
     p.add_argument("lab")
     p.add_argument("--launch", action="store_true", help="start claude in the sandbox right away")
+    p.add_argument("--trace", action="store_true", help="send this sandbox's sessions to the local Langfuse")
     p.set_defaults(fn=cmd_new)
 
     p = sub.add_parser("run")
@@ -698,6 +742,7 @@ def main() -> None:
     p.add_argument("--repeat", type=int, default=1, help="runs are non-deterministic: repeat to compare")
     p.add_argument("--timeout", type=int, default=1800, help="seconds per run")
     p.add_argument("--prompt", help="override the lab's run_prompt; {ticket} and {ticket_id} are substituted")
+    p.add_argument("--trace", action="store_true", help="trace the run in the local Langfuse and post scores")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("compare")
