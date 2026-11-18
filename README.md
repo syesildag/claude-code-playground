@@ -54,6 +54,7 @@ app/  +  tickets/  +  <lab>/overlay/   ──./lab new──►   .sandbox/<lab>
 | [07 MCP](concepts/07-mcp/README.md) | A hand-written stdio MCP server (~150 lines, no SDK), approval, tool naming, protocol logging |
 | [08 Plugins & marketplaces](concepts/08-plugins/README.md) | Package a skill, an agent and a policy hook as a versioned plugin in a local marketplace |
 | [09 Headless & CI](concepts/09-headless/README.md) | `claude -p` with JSON Schema output as a CI gate, and a live trace of tool calls, cost and cache use |
+| [10 Langfuse](concepts/10-langfuse/README.md) | Self-hosted Langfuse with its official Claude Code plugin: every turn, model call and tool call in an observability UI, tagged and scored (`./lab langfuse up`, `--trace`) |
 
 ## Architecture labs (the testbed)
 
@@ -73,6 +74,10 @@ app/  +  tickets/  +  <lab>/overlay/   ──./lab new──►   .sandbox/<lab>
 ./lab run 02-planner-executor-verifier --ticket T03 --repeat 3
 ./lab compare --ticket T03
 ```
+
+Add `--trace` to see each run inside a local **Langfuse** (start it with `./lab langfuse up`). Every model call and
+tool call is recorded, tagged with lab, ticket and model, and the hidden-test verdict is attached as an `accepted`
+score. See [concepts/10-langfuse](concepts/10-langfuse/README.md).
 
 `./lab run` builds a fresh sandbox, runs the lab headlessly (`claude -p`, budget-capped, clean room), then scores it:
 
@@ -134,7 +139,8 @@ tickets/             work items, hidden acceptance tests, reference patches
 concepts/NN-*/       concept labs: lab.json, README.md, overlay/, tests/
 architectures/NN-*/  architecture labs, same structure, runnable with ./lab run
 templates/lab/       skeleton for ./lab scaffold
-lab                  the CLI: list, new, run, compare, inspect, check, scaffold, clean
+lab                  the CLI: list, new, run, compare, inspect, check, scaffold, clean, langfuse
+lablib/              helpers the CLI imports (Langfuse: env generation, API calls, Docker)
 .claude/             Claude Code config for authoring this repo (the new-lab skill)
 ```
 

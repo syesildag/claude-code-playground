@@ -11,6 +11,10 @@ This repo is a playground for Claude Code concepts and a testbed for agent archi
 - `concepts/NN-topic/`, `architectures/NN-pattern/`: one lab each: `lab.json`, `README.md`, `overlay/`
   (files copied on top of the app in the sandbox), optional `tests/` (run by `./lab check`).
 - `templates/lab/`: skeleton used by `./lab scaffold`.
+- `lablib/`: stdlib helpers imported by `./lab` (`langfuse.py`: Langfuse env, API, Docker). Tested by
+  `concepts/10-langfuse/tests/`.
+- `concepts/10-langfuse/server/`: pinned upstream Langfuse compose file (don't edit it) plus `docker-compose.lab.yml`
+  (localhost-only ports, MinIO on 9190). `server/.env` holds generated secrets and is never committed.
 
 ## Commands
 - `./lab check`: run after every change. It validates JSON, compiles Python, runs lab tests, runs

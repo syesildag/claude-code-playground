@@ -1,0 +1,9 @@
+{
+  "title": "Langfuse: trace, monitor, evaluate",
+  "kind": "concept",
+  "summary": "Self-hosted Langfuse plus Langfuse's official Claude Code plugin: every turn, model call, tool call and token of a session in an observability UI, with lab/ticket/model tags and the hidden-test verdict as a score.",
+  "concepts": ["LLMOps", "tracing", "observations", "sessions", "tags", "scores", "self-hosting", "official plugin", "--trace"],
+  "course": ["AI Fluent 2 M7 (trace, monitor, evaluate)", "AI Fluent 1 M3 (cost)", "AI Fluent 1 M7 (scoring)"],
+  "trace": true,
+  "run_prompt": "Implement the ticket described in {ticket}. Verify your work against its acceptance criteria before finishing."
+}
