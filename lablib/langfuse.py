@@ -25,7 +25,8 @@ PLUGIN_ID = "langfuse-observability@claude-plugins-official"
 IMAGE_TAG = "4.80.0"
 HOOK_LOG = "~/.claude/state/langfuse_hook.log"
 # Host ports the stack publishes (web, worker, AI gateway, postgres, redis, clickhouse ×2, minio ×2).
-PORTS = (3000, 3030, 3031, 5432, 6379, 8123, 9000, 9090, 9091)
+# MinIO uses 9190, not upstream's 9090 (taken by Cockpit on Ubuntu): see docker-compose.lab.yml.
+PORTS = (3000, 3030, 3031, 5432, 6379, 8123, 9000, 9190, 9091)
 
 
 # ----------------------------------------------------------------------------- .env for docker compose

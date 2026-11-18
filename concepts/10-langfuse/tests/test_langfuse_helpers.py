@@ -108,6 +108,10 @@ class ServiceTest(unittest.TestCase):
             holder.close()
         self.assertEqual(lf.port_conflicts((port,)), [])
 
+    def test_ports_avoid_cockpit_default(self) -> None:
+        self.assertIn(9190, lf.PORTS)
+        self.assertNotIn(9090, lf.PORTS)
+
     def test_docker_ok_false_for_missing_binary(self) -> None:
         self.assertFalse(lf.docker_ok("no-such-docker-xyz"))
 

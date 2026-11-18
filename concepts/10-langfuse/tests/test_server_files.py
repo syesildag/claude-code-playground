@@ -19,7 +19,7 @@ class ServerFilesTest(unittest.TestCase):
     def test_override_binds_public_ports_to_localhost(self) -> None:
         text = (SERVER_DIR / "docker-compose.lab.yml").read_text(encoding="utf-8")
         self.assertIn("!override", text)
-        for binding in ("127.0.0.1:3000:3000", "127.0.0.1:3031:3031", "127.0.0.1:9090:9000"):
+        for binding in ("127.0.0.1:3000:3000", "127.0.0.1:3031:3031", "127.0.0.1:9190:9000"):
             self.assertIn(binding, text)
 
     def test_env_file_is_gitignored(self) -> None:
@@ -40,6 +40,13 @@ class ServerFilesTest(unittest.TestCase):
         self.assertTrue(bindings, "expected published ports")
         public = [b for b in bindings if b[1] != "127.0.0.1"]
         self.assertEqual(public, [], f"ports reachable from the network: {public}")
+        # MinIO moved from 9090 (taken by Cockpit on Ubuntu) to 9190: the URLs handed to clients must follow,
+        # while the worker keeps reaching MinIO on the internal Docker network.
+        self.assertNotIn("9090", {str(b[2]) for b in bindings})
+        web, worker = services["langfuse-web"]["environment"], services["langfuse-worker"]["environment"]
+        self.assertEqual(web["LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT"], "http://localhost:9190")
+        self.assertEqual(worker["LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT"], "http://localhost:9190")
+        self.assertEqual(worker["LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT"], "http://minio:9000")
 
 
 if __name__ == "__main__":

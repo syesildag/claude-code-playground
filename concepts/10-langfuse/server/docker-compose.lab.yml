@@ -1,13 +1,22 @@
 # Lab override for the upstream docker-compose.yml. Applied as the second -f file by `./lab langfuse up`.
 #
-# Upstream publishes the web UI (3000), the AI gateway (3031) and the MinIO S3 API (9090) on ALL network
-# interfaces. This lab keeps every port on localhost: traces contain your prompts and code.
-# `!override` replaces the service's whole port list (a plain override would append to it and keep the public
-# binding). Requires Docker Compose v2.24 or later.
+# 1. Localhost only. Upstream publishes the web UI (3000), the AI gateway (3031) and the MinIO S3 API (9090) on
+#    ALL network interfaces. This lab keeps every port on localhost: traces contain your prompts and code.
+#    `!override` replaces the service's whole port list (a plain override would append to it and keep the
+#    public binding). Requires Docker Compose v2.24 or later.
+# 2. MinIO on 9190, not 9090. On Ubuntu, Cockpit (a web admin console) listens on 9090 through cockpit.socket.
+#    The URLs Langfuse hands to clients (uploads, export downloads) must use the new host port; the worker
+#    keeps reaching MinIO on the internal Docker network (http://minio:9000), so this is set per service.
 services:
   langfuse-web:
     ports: !override
       - "127.0.0.1:3000:3000"
+    environment:
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9190
+
+  langfuse-worker:
+    environment:
+      LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: http://localhost:9190
 
   langfuse-ai-gateway:
     ports: !override
@@ -15,5 +24,5 @@ services:
 
   minio:
     ports: !override
-      - "127.0.0.1:9090:9000"
+      - "127.0.0.1:9190:9000"
       - "127.0.0.1:9091:9001"
