@@ -1,9 +1,11 @@
 """Offline tests for lablib/langfuse.py: no Docker, no network, no Langfuse server."""
 
+import socket
 import stat
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
@@ -86,6 +88,39 @@ class PluginWiringTest(unittest.TestCase):
         env = lf.generate_env()
         self.assertEqual(lf.session_url(env, "sess-1"),
                          "http://localhost:3000/project/claude-code-lab/sessions/sess-1")
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class ServiceTest(unittest.TestCase):
+    def test_port_conflicts_detects_bound_port(self) -> None:
+        holder = socket.socket()
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        port = holder.getsockname()[1]
+        try:
+            self.assertEqual(lf.port_conflicts((port,)), [port])
+        finally:
+            holder.close()
+        self.assertEqual(lf.port_conflicts((port,)), [])
+
+    def test_docker_ok_false_for_missing_binary(self) -> None:
+        self.assertFalse(lf.docker_ok("no-such-docker-xyz"))
+
+    def test_healthy_false_when_nothing_listens(self) -> None:
+        self.assertFalse(lf.healthy(f"http://127.0.0.1:{free_port()}", 0.5))
+
+    def test_post_scores_returns_errors_instead_of_raising(self) -> None:
+        def failing_api(env, method, path, body=None, base_url=lf.BASE_URL):
+            raise urllib.error.URLError("connection refused")
+
+        errors = lf.post_scores(lf.generate_env(), lf.score_payloads("s", True, 0, "OK"), api=failing_api)
+        self.assertEqual(len(errors), 2)
+        self.assertIn("connection refused", errors[0])
 
 
 if __name__ == "__main__":

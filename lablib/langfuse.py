@@ -6,8 +6,14 @@ The lab runs Langfuse from concepts/10-langfuse/server and points Langfuse's off
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import secrets
+import shutil
+import socket
+import subprocess
+import urllib.request
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +24,8 @@ BASE_URL = "http://localhost:3000"
 PLUGIN_ID = "langfuse-observability@claude-plugins-official"
 IMAGE_TAG = "4.80.0"
 HOOK_LOG = "~/.claude/state/langfuse_hook.log"
+# Host ports the stack publishes (web, worker, AI gateway, postgres, redis, clickhouse ×2, minio ×2).
+PORTS = (3000, 3030, 3031, 5432, 6379, 8123, 9000, 9090, 9091)
 
 
 # ----------------------------------------------------------------------------- .env for docker compose
@@ -114,3 +122,83 @@ def score_payloads(session_id: str, accepted: bool, regressions: int, summary: s
 
 def session_url(env: dict[str, str], session_id: str) -> str:
     return f"{BASE_URL}/project/{env['LANGFUSE_INIT_PROJECT_ID']}/sessions/{session_id}"
+
+
+# ----------------------------------------------------------------------------- services (Docker, HTTP)
+
+def docker_ok(docker: str = "docker") -> bool:
+    """True when the Docker engine answers (Docker Desktop running, WSL integration on)."""
+    try:
+        return subprocess.run([docker, "info"], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def port_conflicts(ports: tuple[int, ...] = PORTS, host: str = "127.0.0.1") -> list[int]:
+    """Ports something else already listens on. Best effort: on WSL2, a port taken on the Windows side may not show."""
+    busy = []
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, port))
+            except OSError:
+                busy.append(port)
+    return busy
+
+
+def compose(*args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    """docker compose with the pinned upstream file plus the localhost-only override, run in SERVER_DIR."""
+    cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.lab.yml", *args]
+    return subprocess.run(cmd, cwd=SERVER_DIR, text=True, capture_output=capture)
+
+
+def healthy(base_url: str = BASE_URL, timeout: float = 3.0) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/public/health", timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 - any failure means "not healthy"
+        return False
+
+
+def runtime_ok() -> bool:
+    """The plugin's hook runs with `uv` (preferred) or with `python3` plus the langfuse SDK."""
+    if shutil.which("uv"):
+        return True
+    try:
+        return subprocess.run(["python3", "-c", "import langfuse"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def plugin_installed() -> bool:
+    """True when Claude Code knows the plugin in any scope (it may still be disabled where you are)."""
+    try:
+        proc = subprocess.run(["claude", "plugin", "list", "--json"], capture_output=True, text=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return PLUGIN_ID in proc.stdout
+
+
+def api(env: dict[str, str], method: str, path: str, body: dict | None = None, base_url: str = BASE_URL) -> dict:
+    """Call Langfuse's public API with the project's keys (basic auth: public key as user, secret as password)."""
+    token = base64.b64encode(
+        f"{env['LANGFUSE_INIT_PROJECT_PUBLIC_KEY']}:{env['LANGFUSE_INIT_PROJECT_SECRET_KEY']}".encode()).decode()
+    request = urllib.request.Request(
+        f"{base_url}{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Basic {token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as resp:
+        raw = resp.read()
+    return json.loads(raw) if raw else {}
+
+
+def post_scores(env: dict[str, str], payloads: list[dict], api: Callable = api) -> list[str]:
+    """Post each score; return the errors instead of raising (scoring must never lose a run's result)."""
+    errors = []
+    for payload in payloads:
+        try:
+            api(env, "POST", "/api/public/scores", payload)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{payload.get('name')}: {exc}")
+    return errors

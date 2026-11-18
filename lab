@@ -9,6 +9,7 @@
   ./lab check                                  validate every lab, ticket and reference solution
   ./lab scaffold <concepts|architectures> <slug>   start a new lab from templates/lab
   ./lab clean [--yes]                          delete all sandboxes
+  ./lab langfuse up|down|status|open [--wipe]  self-hosted Langfuse for tracing (concepts/10-langfuse)
 
 <lab> can be a folder name ("04-hooks"), a path ("concepts/04-hooks") or any unique fragment ("hooks").
 """
@@ -29,6 +30,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO))
+from lablib import langfuse as lf  # noqa: E402
+
 LAB_ROOTS = ("concepts", "architectures")
 SANDBOXES = REPO / ".sandbox"
 RESULTS = REPO / "results"
@@ -615,6 +619,66 @@ def cmd_clean(args: argparse.Namespace) -> None:
     print(f"Deleted {len(boxes)} sandbox(es). Results in results/ were kept.")
 
 
+def langfuse_login(env: dict[str, str]) -> str:
+    return (f"  {lf.BASE_URL}\n  login: {env['LANGFUSE_INIT_USER_EMAIL']} / {env['LANGFUSE_INIT_USER_PASSWORD']}  "
+            f"(from {lf.ENV_FILE.relative_to(REPO)})")
+
+
+def cmd_langfuse(args: argparse.Namespace) -> None:
+    if args.action == "open":
+        if not lf.ENV_FILE.exists():
+            die("Langfuse has never been started here. Run ./lab langfuse up")
+        print(langfuse_login(lf.read_env(lf.ENV_FILE)))
+        return
+
+    if not lf.docker_ok():
+        die("Docker isn't reachable. Start Docker Desktop (with WSL integration enabled), then retry.")
+
+    if args.action == "status":
+        lf.compose("ps")
+        print(f"\nLangfuse healthy: {'yes' if lf.healthy() else 'no'} ({lf.BASE_URL})")
+        print(f"secrets file:     {'present' if lf.ENV_FILE.exists() else 'missing (run ./lab langfuse up)'}")
+        print(f"plugin runtime:   {'ok' if lf.runtime_ok() else 'missing: install uv (curl -LsSf https://astral.sh/uv/install.sh | sh)'}")
+        print(f"plugin installed: {'yes' if lf.plugin_installed() else 'no (./lab new <lab> --trace enables it per sandbox)'}")
+        return
+
+    if args.action == "down":
+        if args.wipe:
+            if not args.yes and input("Delete all Langfuse data (traces, scores, users)? [y/N] ").strip().lower() != "y":
+                return
+            lf.compose("down", "-v")
+            print("Stopped and wiped. The next `up` re-creates the project from the same .env.")
+        else:
+            lf.compose("down")
+            print("Stopped. Data is kept in Docker volumes. `./lab langfuse up` resumes.")
+        return
+
+    # up
+    env, created = lf.ensure_env()
+    if created:
+        print(f"✔ Generated {lf.ENV_FILE.relative_to(REPO)} (random secrets, gitignored, mode 600)")
+    if lf.healthy():
+        print("✔ Langfuse is already running\n" + langfuse_login(env))
+        return
+    stack_running = bool(lf.compose("ps", "-q", capture=True).stdout.strip())
+    if not stack_running:
+        busy = lf.port_conflicts()
+        if busy:
+            die("these ports are already in use: " + ", ".join(map(str, busy))
+                + ". Stop whatever uses them, then retry.")
+    print("Starting Langfuse (the first run pulls about 3–4 GB of images)…", flush=True)
+    if lf.compose("up", "-d").returncode != 0:
+        die("docker compose up failed (see the output above)")
+    deadline = time.time() + 300
+    while not lf.healthy():
+        if time.time() > deadline:
+            die("Langfuse isn't healthy after 300 s. Check `./lab langfuse status`, "
+                "or run `./lab langfuse up` again (it's safe to repeat).")
+        print(".", end="", flush=True)
+        time.sleep(3)
+    print("\n✔ Langfuse is running\n" + langfuse_login(env))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="lab", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -655,6 +719,12 @@ def main() -> None:
     p = sub.add_parser("clean")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_clean)
+
+    p = sub.add_parser("langfuse", help="self-hosted Langfuse (concepts/10-langfuse)")
+    p.add_argument("action", choices=("up", "down", "status", "open"))
+    p.add_argument("--wipe", action="store_true", help="with down: also delete all data volumes")
+    p.add_argument("--yes", action="store_true", help="with down --wipe: don't ask")
+    p.set_defaults(fn=cmd_langfuse)
 
     args = parser.parse_args()
     args.fn(args)
